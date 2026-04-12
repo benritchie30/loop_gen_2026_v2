@@ -31,7 +31,11 @@ class GraphManager:
                 self._graph = pickle.load(f)
             # Derive the active name from the filename
             self._active_name = os.path.splitext(os.path.basename(path))[0]
-            print(f"Graph loaded successfully: {self._active_name}")
+            num_nodes = self._graph.number_of_nodes()
+            num_edges = self._graph.number_of_edges()
+            avg_deg = (2 * num_edges) / num_nodes if num_nodes else 0
+            print(f"Graph loaded successfully: {self._active_name} "
+                  f"({num_nodes} nodes, {num_edges} edges, avg degree {avg_deg:.2f})")
 
             # Auto-add elevation if missing (migration for old graphs)
             sample_node = next(iter(self._graph.nodes))

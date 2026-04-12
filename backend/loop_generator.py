@@ -13,6 +13,7 @@ import functools
 MILES_PER_METER = 0.000621371
 FEET_PER_METER = 3.28084
 MIN_LOOP_LENGTH_METERS = 1000  # Minimum loop length to be considered valid
+TURN_ANGLE_THRESHOLD_DEG = 30.0  # edges with bearing change >= this count as a turn
 
 # Initialize SRTM downloader
 _srtm_data = None
@@ -133,9 +134,13 @@ def _compare_edge_names(name1, name2):
     
     return bool(n1_set & n2_set)
 
+def _bearing_delta(b1, b2):
+    """Absolute bearing change in [0, 180] degrees."""
+    d = abs(b1 - b2) % 360
+    return d if d <= 180 else 360 - d
+
 def weight_function_turns_dist(G, u_node, v, current_turns, current_dist):
-    """Calculates path weight considering turns and distance."""
-    # Handle potentially missing edge data gracefully
+    """Calculates path weight considering turns (by bearing change) and distance."""
     if not G.has_edge(u_node.id, v):
         return float('inf'), float('inf')
     try:
@@ -144,24 +149,18 @@ def weight_function_turns_dist(G, u_node, v, current_turns, current_dist):
         print("KeyError in weight_function_turns_dist")
         print(u_node.id, v)
         return current_turns, current_dist
-    
-    if u_node.prev is None:
-        return 0, current_dist + curr_edge.get('length', 0)
-
-    try:
-        if not G.has_edge(u_node.prev.id, u_node.id):
-             return current_turns, current_dist
-        prev_edge = G[u_node.prev.id][u_node.id][0]
-    except KeyError:
-        return current_turns, current_dist
 
     new_dist = current_dist + curr_edge.get('length', 0)
 
-    # Compare edge names to detect turns
-    prev_names = prev_edge.get('name', [])
-    curr_names = curr_edge.get('name', [])
+    if u_node.prev is None:
+        return 0, new_dist
 
-    if not _compare_edge_names(prev_names, curr_names):
+    # Geometric turn: bearing change between previous edge and current edge.
+    prev_bearing = calculate_initial_bearing(G, u_node.prev.id, u_node.id)
+    curr_bearing = calculate_initial_bearing(G, u_node.id, v)
+    delta = _bearing_delta(prev_bearing, curr_bearing)
+
+    if delta >= TURN_ANGLE_THRESHOLD_DEG:
         current_turns += 1
 
     return current_turns, new_dist
@@ -421,20 +420,28 @@ def find_paths_turns_dist(
     # print(f"Starting loop detection... range {min_path_length}-{max_path_length}m")
     
     iters = 0
+    yielded = 0
+    max_dist_reached = 0.0
     MAX_ITERS = 1000000
+    PRINT_EVERY = 10000
     # MAX_ITERS = 100000000
     while queue:
         iters += 1
         if iters > MAX_ITERS:
             print(f"Max iterations {MAX_ITERS} reached. Stopping.")
-            print(f"Current queue size: {len(queue)}")
+            print(f"  queue={len(queue)}, yielded={yielded}, "
+                  f"max_dist_reached={max_dist_reached:.0f}m")
             break
 
-        if iters % 100 == 0:
-            print(f"Iter {iters}: Queue size {len(queue)}")
-
-            
         (turns, dist, _), curr_node, visited_mask = heapq.heappop(queue)
+
+        if dist > max_dist_reached:
+            max_dist_reached = dist
+
+        if iters % PRINT_EVERY == 0:
+            print(f"Iter {iters}: queue={len(queue)}, yielded={yielded}, "
+                  f"pop_dist={dist:.0f}m, pop_turns={turns}, "
+                  f"max_dist_reached={max_dist_reached:.0f}m")
         
         # Periodic status print
         # Periodic status print
@@ -498,6 +505,7 @@ def find_paths_turns_dist(
                 path_masks.add(visited_mask)
                 if centroid:
                     existing_centroids.append(centroid)
+                yielded += 1
                 yield geojson_feature
 
             continue
