@@ -2,10 +2,13 @@ import pickle
 import os
 import json
 import math
+from datetime import datetime
 import osmnx as ox
 import networkx as nx
 from shapely.geometry import Polygon, Point, LineString, MultiLineString, mapping
+from shapely.ops import unary_union
 import geopandas as gpd
+import matplotlib.pyplot as plt
 import srtm
 
 class GraphManager:
@@ -340,15 +343,88 @@ class GraphManager:
             print(f"  Removed {len(edges_to_remove)} redundant multi-edges.")
 
     @staticmethod
-    def _prune_graph_biconnected(G, min_component_length=3000):
-        """Prunes dead-end branches and tiny loops using block-cut tree analysis."""
-        print(f"  Pruning graph (min_component_length={min_component_length}m)...")
-        initial_nodes = len(G.nodes)
+    def _debug_plot_graph(G, title, filepath, highlight_nodes=None):
+        """Plot nodes+edges; red overlay = about to be removed/merged. Saves PNG and tries to show a window."""
+        highlight_nodes = set(highlight_nodes or [])
+        print(f"  [plot] {title}")
+        print(f"         -> {filepath}")
+        if G.number_of_nodes() == 0:
+            print("  [plot] skip (empty graph)")
+            return
 
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+
+        try:
+            fig, ax = ox.plot_graph(
+                G,
+                node_color='#2980b9',
+                node_size=8,
+                edge_color='#7f8c8d',
+                edge_linewidth=1.0,
+                bgcolor='white',
+                figsize=(12, 12),
+                show=False,
+                close=False,
+            )
+            if highlight_nodes:
+                H = G.subgraph(highlight_nodes)
+                if H.number_of_nodes() > 0:
+                    ox.plot_graph(
+                        H,
+                        ax=ax,
+                        node_color='#c0392b',
+                        node_size=22,
+                        edge_color='#e74c3c',
+                        edge_linewidth=2.0,
+                        bgcolor='white',
+                        show=False,
+                        close=False,
+                    )
+            ax.set_title(title, fontsize=11)
+            fig.savefig(filepath, dpi=150, bbox_inches='tight')
+            plt.show(block=True)
+            plt.close(fig)
+        except Exception as e:
+            print(f"  [plot] failed ({e}).")
+            try:
+                plt.close('all')
+            except Exception:
+                pass
+
+    @staticmethod
+    def _degree2_nodes(G):
+        G_undir = G.to_undirected()
+        return {n for n, d in G_undir.degree() if d == 2}
+
+    @staticmethod
+    def _consolidation_cluster_nodes(G, tolerance=15):
+        """Nodes whose projected buffers overlap (approx what consolidate_intersections merges)."""
+        if G.number_of_nodes() < 2:
+            return set()
+        G_proj = ox.project_graph(G)
+        gdf = ox.graph_to_gdfs(G_proj, nodes=True, edges=False)
+        undir = G.to_undirected()
+        # dead_ends=False in consolidate_intersections skips degree-1 nodes
+        eligible = gdf.loc[[n for n in gdf.index if undir.degree(n) > 1]]
+        if eligible.empty:
+            return set()
+        buffered = eligible.buffer(tolerance)
+        merged = unary_union(list(buffered.geometry))
+        geoms = list(merged.geoms) if hasattr(merged, 'geoms') else [merged]
+        clusters = gpd.GeoDataFrame(geometry=geoms, crs=eligible.crs)
+        joined = gpd.sjoin(eligible, clusters, predicate='intersects')
+        sizes = joined.groupby('index_right').size()
+        multi = set(sizes[sizes > 1].index)
+        if not multi:
+            return set()
+        return set(joined[joined['index_right'].isin(multi)].index)
+
+    @staticmethod
+    def _compute_biconnected_prune_nodes(G, min_component_length):
+        """Nodes dropped by block-cut pruning, including isolates that would follow. None = skip prune."""
         G_undir = G.to_undirected()
         components = list(nx.biconnected_components(G_undir))
 
-        # Measure each component by total edge length
         comp_lengths = []
         for comp in components:
             comp_set = set(comp)
@@ -367,7 +443,6 @@ class GraphManager:
                             total_length += min_length
             comp_lengths.append(total_length)
 
-        # Build block-cut tree
         art_points = set(nx.articulation_points(G_undir))
         block_cut_tree = nx.Graph()
         for i, comp in enumerate(components):
@@ -384,12 +459,10 @@ class GraphManager:
                         if block_cut_tree.nodes[n].get('is_large')]
 
         if not large_blocks:
-            print("  WARNING: No large components found. Skipping pruning.")
-            return
+            return None
 
         large_set = set(large_blocks)
 
-        # Iterative post-order DFS to mark needed subtrees
         def mark_needed_iterative(root):
             parent = {root: None}
             order = []
@@ -418,7 +491,6 @@ class GraphManager:
                 visited_bct.update(tree_component)
                 mark_needed_iterative(lb)
 
-        # Collect valid nodes
         valid_nodes = set()
         for node in block_cut_tree.nodes():
             node_data = block_cut_tree.nodes[node]
@@ -429,12 +501,33 @@ class GraphManager:
                     valid_nodes.add(node)
 
         nodes_to_remove = set(G.nodes()) - valid_nodes
+        soon_isolates = set()
+        for n in G.nodes():
+            if n in nodes_to_remove:
+                continue
+            nbrs = set(G.predecessors(n)) | set(G.successors(n))
+            if not nbrs or nbrs <= nodes_to_remove:
+                soon_isolates.add(n)
+        return nodes_to_remove | soon_isolates
+
+    @staticmethod
+    def _prune_graph_biconnected(G, min_component_length=25):
+        """Prunes dead-end branches and tiny loops using block-cut tree analysis."""
+        print(f"  Pruning graph (min_component_length={min_component_length}m)...")
+        initial_nodes = len(G.nodes)
+
+        nodes_to_remove = GraphManager._compute_biconnected_prune_nodes(G, min_component_length)
+        if nodes_to_remove is None:
+            print("  WARNING: No large components found. Skipping pruning.")
+            return set()
+
         G.remove_nodes_from(nodes_to_remove)
         isolates = list(nx.isolates(G))
         if isolates:
             G.remove_nodes_from(isolates)
 
         print(f"  Pruned: {initial_nodes} -> {len(G.nodes)} nodes")
+        return nodes_to_remove | set(isolates)
 
     @staticmethod
     def _simplify_graph_topology(G):
@@ -471,9 +564,20 @@ class GraphManager:
         print(f"  Topology simplified: {initial_nodes} -> {len(G.nodes)} nodes ({nodes_removed} removed)")
 
     @staticmethod
-    def _process_graph(G):
+    def _process_graph(G, debug_name="graph"):
         """Full graph simplification pipeline: prune, consolidate, simplify."""
         print(f"\n=== Processing Graph ({len(G.nodes)} nodes, {len(G.edges)} edges) ===")
+
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        plot_dir = os.path.join(os.path.dirname(__file__), "simp_debug", f"{debug_name}_{stamp}")
+        os.makedirs(plot_dir, exist_ok=True)
+        print(f"  Simplification plots: {plot_dir}")
+        print("  Close each plot window to continue to the next stage.")
+
+        def plot(filename, title, graph, highlight=None):
+            GraphManager._debug_plot_graph(
+                graph, title, os.path.join(plot_dir, filename), highlight
+            )
 
         # 1. Strip non-essential edge attributes
         whitelist = {'geometry', 'length', 'name', 'highway', 'ref'}
@@ -481,27 +585,67 @@ class GraphManager:
             for key in [k for k in list(data.keys()) if k not in whitelist]:
                 data.pop(key)
 
+        plot("00_initial.png", "Initial graph (after OSM download + attr strip)", G)
+
         # 2. Prune dead ends and tiny loops
-        GraphManager._prune_graph_biconnected(G, min_component_length=3000)
+        min_comp = 3000
+        prune_nodes = GraphManager._compute_biconnected_prune_nodes(G, min_comp)
+        if prune_nodes is None:
+            print("  WARNING: No large components found. Skipping pruning.")
+            plot("01_prune_skipped.png", "Prune skipped (no large components)", G)
+        else:
+            plot(
+                "01_prune_will_remove.png",
+                f"Prune (min_component_length={min_comp}m): red = nodes/edges to remove",
+                G,
+                prune_nodes,
+            )
+            GraphManager._prune_graph_biconnected(G, min_component_length=min_comp)
+            plot("02_prune_after.png", "After prune", G)
 
         # 3. Consolidate complex intersections
         print("  Consolidating intersections...")
+        cons_nodes = GraphManager._consolidation_cluster_nodes(G, tolerance=15)
+        plot(
+            "03_consolidate_will_merge.png",
+            "Consolidate intersections (15m): red = nodes in merge clusters",
+            G,
+            cons_nodes,
+        )
         G_proj = ox.project_graph(G)
         G_proj_cons = ox.simplification.consolidate_intersections(
             G_proj, rebuild_graph=True, tolerance=15, dead_ends=False
         )
         G = ox.project_graph(G_proj_cons, to_crs='epsg:4326')
         print(f"  After consolidation: {len(G.nodes)} nodes, {len(G.edges)} edges")
+        plot("04_consolidate_after.png", "After intersection consolidation", G)
 
         # 4. Keep only shortest edge between node pairs
         # GraphManager._keep_shortest_edge(G)
 
         # 5. Merge degree-2 nodes
+        deg2 = GraphManager._degree2_nodes(G)
+        plot(
+            "05_topology_will_merge.png",
+            "Topology simplify: red = degree-2 nodes to merge",
+            G,
+            deg2,
+        )
         GraphManager._simplify_graph_topology(G)
+        plot("06_topology_after.png", "After merging degree-2 nodes", G)
 
         # 6. Remove self-loops and isolates
         # G.remove_edges_from(list(nx.selfloop_edges(G)))
-        G.remove_nodes_from(list(nx.isolates(G)))
+        isolates = list(nx.isolates(G))
+        if isolates:
+            plot(
+                "07_isolates_will_remove.png",
+                "Isolates: red = nodes to remove",
+                G,
+                isolates,
+            )
+        G.remove_nodes_from(isolates)
+        plot("08_final.png", "After isolate removal (final simplified graph)", G)
 
         print(f"=== Processing complete: {len(G.nodes)} nodes, {len(G.edges)} edges ===\n")
         return G
@@ -551,7 +695,7 @@ class GraphManager:
             raise ValueError("Graphs directory not set.")
 
         G = self._apply_exclusions(G, exclusion_zones)
-        G = self._process_graph(G)
+        G = self._process_graph(G, debug_name=name)
         G = self._relabel_graph(G)
         self._update_edge_names(G)
         self._add_elevation_data(G)
@@ -568,7 +712,7 @@ class GraphManager:
         return name
 
     def generate_graph(self, name: str, south: float, west: float, north: float, east: float,
-                       custom_filter: str = '["highway"~"cycleway|path|primary|secondary|tertiary|residential|primary_link|secondary_link|tertiary_link|road|living_street|bridleway|path"]',
+                       custom_filter: str = '["highway"~"trunk|cycleway|path|primary|secondary|tertiary|residential|primary_link|secondary_link|tertiary_link|road|living_street|bridleway|path"]',
                        exclusion_zones: list = None):
         """Downloads, processes, and saves a new graph from OSMnx using bounding box."""
         print(f"Generating graph '{name}' for bbox: S={south}, W={west}, N={north}, E={east}")
@@ -588,7 +732,7 @@ class GraphManager:
         return self._finalize_and_save_graph(G, name, boundary_metadata, exclusion_zones)
 
     def generate_graph_from_polygon(self, name: str, coordinates: list,
-                                     custom_filter: str = '["highway"~"cycleway|path|primary|secondary|tertiary|residential|primary_link|secondary_link|tertiary_link|road|living_street|bridleway|path"]',
+                                     custom_filter: str = '["highway"~"trunk|cycleway|path|primary|secondary|tertiary|residential|primary_link|secondary_link|tertiary_link|road|living_street|bridleway|path"]',
                                      exclusion_zones: list = None):
         """Downloads, processes, and saves a new graph from OSMnx using polygon boundary.
         coordinates: list of [lat, lng] pairs."""
@@ -611,7 +755,7 @@ class GraphManager:
 
     def generate_graph_from_circle(self, name: str, center_lat: float, center_lng: float,
                                     radius_miles: float,
-                                    custom_filter: str = '["highway"~"cycleway|path|primary|secondary|tertiary|residential|primary_link|secondary_link|tertiary_link|road|living_street|bridleway|path"]',
+                                    custom_filter: str = '["highway"~"trunk|cycleway|path|primary|secondary|tertiary|residential|primary_link|secondary_link|tertiary_link|road|living_street|bridleway|path"]',
                                     exclusion_zones: list = None):
         """Downloads, processes, and saves a new graph from a circular boundary.
         radius_miles: radius in miles."""

@@ -9,6 +9,7 @@ venv/
 # Project Specific
 backend/graphs/
 backend/cache/
+backend/simp_debug/
 backend/.env
 
 # JavaScript/Node

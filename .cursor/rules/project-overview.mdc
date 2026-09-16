@@ -1,0 +1,23 @@
+---
+description: High-level picture of this personal loop-route app and how FE/BE talk
+alwaysApply: true
+---
+
+# Project overview
+
+This is a personal web app for generating looping run/bike routes. The user drops a pin on a Leaflet map; a Python backend searches an OSM-derived graph and streams candidate routes; the React UI lets them browse, sort, and filter those routes. Do not treat this as a multi-tenant product. Prefer small, local changes over new architecture.
+
+## Split
+
+- Frontend: Vite + React in `route-loop-finder/`. Talks only over WebSocket (`ws://localhost:8765`), not REST.
+- Backend: Python in `backend/`. One process, one shared `GraphManager` (active graph is global to all connections). Graphs are `.gpickle` plus optional `.boundary.json`.
+
+## WebSocket contract
+
+Messages are JSON with a `type` field. Generation is a stream on that same socket: `START_GENERATION` → `PATHSET_CREATED` → many `PATH_RECEIVED` (GeoJSON Feature + properties) → `GENERATION_COMPLETE`. Graph create is `CREATE_GRAPH` → `GRAPH_CREATING` / `GRAPH_CREATED` or `GRAPH_CREATE_ERROR`. Drawing tools send `GET_NODES_IN_REGION` (lasso) or `GET_NODES_NEAR_POLYLINE` (path tool) and get back a hex **node bitmask** used only on the client to filter already-generated paths.
+
+A generated "loop" is a **lollipop**: out-and-back stem + a loop in the middle + the stem reversed. That is intended, not a bug.
+
+Lasso means "must visit this area" (any node in the mask). Path tool means "must cover this exact snapped chain" (all nodes). Path tool is shortest-path between clicks, not a buffer around the drawn line.
+
+Be careful: generation currently blocks that connection (no cancel). Switching graphs mid-session can leave stale path sets on the client. The frontend `algorithm` setting is unused; search is always turn-then-distance.

@@ -1,0 +1,31 @@
+---
+description: Pathfinding heuristics, graph simplification intent, and gotchas
+globs: backend/loop_generator.py,backend/graph_manager.py,backend/server.py
+alwaysApply: false
+---
+
+# Graph and pathfinding
+
+## Search
+
+`find_paths` always uses the turn-then-distance heap (`find_paths_turns_dist`). Do not "wire up" the unused `algorithm` / `"scenic"` flag unless asked.
+
+Turns-first is intentional: it surfaces simple, followable corridors and finds loops faster than distance-only search, which meanders. A turn is a ≥30° bearing change. Immediate U-turns are skipped.
+
+Tradeoff you must not "fix" casually: on dense city graphs the heap stays on short same-turn paths and barely explores. Rural graphs work well. The owner is open to other queue orderings but wants that quality-vs-coverage tradeoff respected.
+
+Uniqueness: the owner **only uses centroid dedup** (reject if sampled-geometry centroid is within `min_dist_m` of a kept path). Jaccard is leftover — it missed "same roads, different node IDs" at intersections. Prefer centroid if you touch uniqueness.
+
+`min_loop_length` is passed as 600 m from the server; ignore the unused 1000 m constant in the generator unless unifying them on purpose.
+
+## Simplification
+
+Intent: downloaded MultiDiGraph → keep topology useful for loops (merge through-nodes, drop true dead-ends). Extra steps currently in `_process_graph`: 3 km biconnected-component prune (dead-ends **and** small loops), 15 m intersection consolidation, then degree-2 merges.
+
+**Keep shortest parallel multi-edge** is intended (algorithm should not have to handle rare parallel OSM edges) but that call is commented out. If you restore it, that is aligning with intent, not a new idea.
+
+When merging geometries in `_remove_node_and_merge`, the same `geometry` is written on `u→v` and `v→u`. Be careful changing merge/elevation/sampling: the elevation hover already skips, runs backward, and mismatches the map. Treat reverse-edge orientation as the leading suspect; do not "fix" profiles by resampling blindly without checking edge direction.
+
+Missing neighborhood/residential nodes: they are in the OSM `custom_filter`. Lowering `_prune_graph_biconnected`'s `min_component_length` (even to 25 m) did **not** bring them back. Do not assume that knob is the cause; look at consolidation, OSM simplify, filters (`unclassified`/`service` are excluded), or stale saved graphs.
+
+Graph create: even tiny bboxes trigger Overpass "tens of thousands times max query area". Suspect bbox argument order vs the installed OSMnx version (west/south/east/north vs north/south/east/west), not a truly huge region. Check the OSMnx signature before changing download logic.
