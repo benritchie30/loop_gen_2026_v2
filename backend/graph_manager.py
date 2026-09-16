@@ -300,25 +300,30 @@ class GraphManager:
             geo2 = LineString([(G.nodes[n]['x'], G.nodes[n]['y']),
                                (G.nodes[v]['x'], G.nodes[v]['y'])])
 
-        coords1 = list(geo1.coords)
-        coords2 = list(geo2.coords)
-        start1, end1 = coords1[0], coords1[-1]
-        start2, end2 = coords2[0], coords2[-1]
-        if start1 == start2:
-            coords1 = coords1[::-1]
-        elif start1 == end2:
-            coords1 = coords1[::-1]
-            coords2 = coords2[::-1]
-        elif end1 == end2:
-            coords2 = coords2[::-1]
+        def _orient(coords, origin):
+            if len(coords) < 2:
+                return coords
+            start, end = coords[0], coords[-1]
+            d_start = (start[0] - origin[0]) ** 2 + (start[1] - origin[1]) ** 2
+            d_end = (end[0] - origin[0]) ** 2 + (end[1] - origin[1]) ** 2
+            return coords[::-1] if d_end < d_start else coords
 
+        u_xy = (G.nodes[u]['x'], G.nodes[u]['y'])
+        n_xy = (G.nodes[n]['x'], G.nodes[n]['y'])
+        coords1 = _orient(list(geo1.coords), u_xy)
+        coords2 = _orient(list(geo2.coords), n_xy)
+
+        fwd_geom = LineString(coords1[:-1] + coords2)
         new_attr = attr_u.copy()
-        new_attr['geometry'] = LineString(coords1[:-1] + coords2)
+        new_attr['geometry'] = fwd_geom
         new_attr['length'] = attr_u.get('length', 0) + attr_v.get('length', 0)
+
+        rev_attr = new_attr.copy()
+        rev_attr['geometry'] = LineString(list(fwd_geom.coords)[::-1])
 
         G.remove_node(n)
         G.add_edge(u, v, **new_attr)
-        G.add_edge(v, u, **new_attr)
+        G.add_edge(v, u, **rev_attr)
         return True
 
     @staticmethod
@@ -511,7 +516,7 @@ class GraphManager:
         return nodes_to_remove | soon_isolates
 
     @staticmethod
-    def _prune_graph_biconnected(G, min_component_length=25):
+    def _prune_graph_biconnected(G, min_component_length=3000):
         """Prunes dead-end branches and tiny loops using block-cut tree analysis."""
         print(f"  Pruning graph (min_component_length={min_component_length}m)...")
         initial_nodes = len(G.nodes)
@@ -605,7 +610,7 @@ class GraphManager:
 
         # 3. Consolidate complex intersections
         print("  Consolidating intersections...")
-        cons_nodes = GraphManager._consolidation_cluster_nodes(G, tolerance=15)
+        cons_nodes = GraphManager._consolidation_cluster_nodes(G, tolerance=40)
         plot(
             "03_consolidate_will_merge.png",
             "Consolidate intersections (15m): red = nodes in merge clusters",

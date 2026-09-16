@@ -185,6 +185,35 @@ def _is_unique_path(
             return False
     return True
 
+def _oriented_edge_geom(G, u, v):
+    """LineString for u→v, reversed if stored coords run v→u.
+
+    Degree-2 merges write one geometry onto both directed edges. Sampling and
+    GeoJSON must follow travel direction or the elevation hover walks backward.
+    """
+    ux, uy = G.nodes[u]['x'], G.nodes[u]['y']
+    vx, vy = G.nodes[v]['x'], G.nodes[v]['y']
+    geom = None
+    if G.has_edge(u, v):
+        data = G[u][v][0] if G.is_multigraph() else G[u][v]
+        geom = data.get('geometry')
+    if geom is None or geom.is_empty:
+        return shapely.geometry.LineString([(ux, uy), (vx, vy)])
+    if geom.geom_type == 'MultiLineString':
+        geom = linemerge(geom)
+        if geom.geom_type != 'LineString':
+            geom = max(geom.geoms, key=lambda g: g.length)
+    coords = list(geom.coords)
+    if len(coords) < 2:
+        return shapely.geometry.LineString([(ux, uy), (vx, vy)])
+    start, end = coords[0], coords[-1]
+    d_start_u = (start[0] - ux) ** 2 + (start[1] - uy) ** 2
+    d_end_u = (end[0] - ux) ** 2 + (end[1] - uy) ** 2
+    if d_end_u < d_start_u:
+        return shapely.geometry.LineString(coords[::-1])
+    return geom
+
+
 def _sample_path_geometry(G, path, sample_interval_m=50):
     """Yields (dist_m, lat, lng, bearing) uniformly sampled along path."""
     cumulative_m = 0.0
@@ -194,16 +223,9 @@ def _sample_path_geometry(G, path, sample_interval_m=50):
         return
 
     for u, v in zip(path[:-1], path[1:]):
-        if G.has_edge(u, v):
-            data = G[u][v][0] if G.is_multigraph() else G[u][v]
-            if 'geometry' in data:
-                geom = data['geometry']
-            else:
-                p1 = (G.nodes[u]['x'], G.nodes[u]['y'])
-                p2 = (G.nodes[v]['x'], G.nodes[v]['y'])
-                geom = shapely.geometry.LineString([p1, p2])
-        else:
+        if not G.has_edge(u, v):
             continue
+        geom = _oriented_edge_geom(G, u, v)
 
         # Compute geodesic length
         coords = list(geom.coords)
@@ -371,27 +393,22 @@ def path_to_geojson(
     if not path:
         return None
         
-    line_strings = []
-    
+    coords = []
     for u, v in zip(path[:-1], path[1:]):
-        # Retrieve edge geometry if available
-        if G.has_edge(u, v):
-            # For MultiDiGraph, G[u][v] is a dict of edges
-            # We take the first one (0) or iterate to find best fit
-            data = G[u][v][0] if G.is_multigraph() else G[u][v]
-            
-            if 'geometry' in data:
-                line_strings.append(data['geometry'])
-            else:
-                # Create straight line if no geometry
-                p1 = shapely.geometry.Point(G.nodes[u]['x'], G.nodes[u]['y'])
-                p2 = shapely.geometry.Point(G.nodes[v]['x'], G.nodes[v]['y'])
-                line_strings.append(shapely.geometry.LineString([p1, p2]))
-                
-    if not line_strings:
+        if not G.has_edge(u, v):
+            continue
+        part = list(_oriented_edge_geom(G, u, v).coords)
+        if not part:
+            continue
+        if coords and coords[-1] == part[0]:
+            coords.extend(part[1:])
+        else:
+            coords.extend(part)
+
+    if len(coords) < 2:
         return None
 
-    merged = linemerge(line_strings)
+    merged = shapely.geometry.LineString(coords)
     
     return {
         "type": "Feature",
