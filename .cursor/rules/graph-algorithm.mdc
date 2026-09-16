@@ -26,6 +26,5 @@ Intent: downloaded MultiDiGraph → keep topology useful for loops (merge throug
 
 When merging geometries in `_remove_node_and_merge`, the same `geometry` is written on `u→v` and `v→u`. Be careful changing merge/elevation/sampling: the elevation hover already skips, runs backward, and mismatches the map. Treat reverse-edge orientation as the leading suspect; do not "fix" profiles by resampling blindly without checking edge direction.
 
-Missing neighborhood/residential nodes: they are in the OSM `custom_filter`. Lowering `_prune_graph_biconnected`'s `min_component_length` (even to 25 m) did **not** bring them back. Do not assume that knob is the cause; look at consolidation, OSM simplify, filters (`unclassified`/`service` are excluded), or stale saved graphs.
 
 Graph create: even tiny bboxes trigger Overpass "tens of thousands times max query area". Suspect bbox argument order vs the installed OSMnx version (west/south/east/north vs north/south/east/west), not a truly huge region. Check the OSMnx signature before changing download logic.

@@ -1,0 +1,14 @@
+Instead of downloading new graphs constantly. Download one big graph in the background at the start
+then the user can select the boundary of the graph they want to use
+let them see all the edges displayed in graph and click directly on the edges they want to remove
+and show visualy
+click on edges to display paths including those nodes/edges 
+-either works like laso or selector
+-can click them on or off
+
+Make boundary/shape of most recent submited graph for download the start shape when you go to make a new one
+make show path preview on by default. or last seleted graph. 
+
+remove jacard similarity as an option for dedup. Remove the dedup selector on input box. 
+
+How can I set up the project for it to be easier to test. like the agent can run different inputs

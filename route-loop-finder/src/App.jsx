@@ -9,6 +9,61 @@ import { useWebSocket } from './hooks/useWebSocket';
 import { usePathSets } from './hooks/usePathSets';
 import { useAppMode } from './hooks/useAppMode';
 
+const LAST_GRAPH_SHAPE_KEY = 'lastGraphShape';
+
+function isValidGraphBounds(bounds) {
+  if (!bounds?.type) return false;
+  if (bounds.type === 'box') {
+    return bounds.nw?.lat != null && bounds.nw?.lng != null &&
+      bounds.se?.lat != null && bounds.se?.lng != null;
+  }
+  if (bounds.type === 'polygon') {
+    return Array.isArray(bounds.coordinates) && bounds.coordinates.length >= 3;
+  }
+  if (bounds.type === 'circle') {
+    return bounds.center?.lat != null && bounds.center?.lng != null && bounds.radiusMiles != null;
+  }
+  return false;
+}
+
+function loadLastGraphShape() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LAST_GRAPH_SHAPE_KEY));
+    return isValidGraphBounds(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveLastGraphShape(bounds) {
+  if (!bounds?.type) return;
+  localStorage.setItem(LAST_GRAPH_SHAPE_KEY, JSON.stringify(bounds));
+}
+
+/** Convert a saved .boundary.json payload into BoundsSelector graphBounds. */
+function boundaryToGraphBounds(boundary) {
+  if (!boundary?.type) return null;
+  if (boundary.type === 'box' &&
+      [boundary.north, boundary.south, boundary.east, boundary.west].every((v) => v != null)) {
+    return {
+      type: 'box',
+      nw: { lat: boundary.north, lng: boundary.west },
+      se: { lat: boundary.south, lng: boundary.east }
+    };
+  }
+  if (boundary.type === 'polygon' && Array.isArray(boundary.coordinates) && boundary.coordinates.length >= 3) {
+    return { type: 'polygon', coordinates: boundary.coordinates };
+  }
+  if (boundary.type === 'circle' && boundary.center != null && boundary.radius_miles != null) {
+    const center = Array.isArray(boundary.center)
+      ? { lat: boundary.center[0], lng: boundary.center[1] }
+      : boundary.center;
+    if (center?.lat == null || center?.lng == null) return null;
+    return { type: 'circle', center, radiusMiles: boundary.radius_miles };
+  }
+  return null;
+}
+
 function App() {
   // Initialize hooks
   const { status: wsStatus, sendMessage, subscribe } = useWebSocket();
@@ -61,7 +116,7 @@ function App() {
   const [showArrows, setShowArrows] = useState(true);
   const [showCentroids, setShowCentroids] = useState(false);
   const [primaryColor, setPrimaryColor] = useState(() => localStorage.getItem('primaryColor') || '215'); // Default hue (Blue)
-  const [showPathPreview, setShowPathPreview] = useState(false);
+  const [showPathPreview, setShowPathPreview] = useState(true);
   const [pathPreviewOpacity, setPathPreviewOpacity] = useState(0.5);
   const [showGraphBoundary, setShowGraphBoundary] = useState(false);
   const [showGraphNodes, setShowGraphNodes] = useState(false);
@@ -256,10 +311,19 @@ function App() {
   }, [sendMessage]);
 
   const handleStartGraphCreate = useCallback(() => {
-    setGraphBounds(null); // Will be auto-initialized by BoundsSelector
-    setGraphCreateMode('box');
+    const lastShape = loadLastGraphShape();
+    const fromActive = activeGraph ? boundaryToGraphBounds(graphBoundaries[activeGraph]) : null;
+    const startShape = lastShape?.type ? lastShape : fromActive;
+
+    if (startShape?.type) {
+      setGraphCreateMode(startShape.type);
+      setGraphBounds(startShape);
+    } else {
+      setGraphCreateMode('box');
+      setGraphBounds(null); // BoundsSelector fills from the current viewport
+    }
     setMode('graphCreate');
-  }, [setMode]);
+  }, [setMode, activeGraph, graphBoundaries]);
 
   const handleGraphBoundsChange = useCallback((bounds) => {
     setGraphBounds(bounds);
@@ -319,6 +383,7 @@ function App() {
         payload.east = se.lng;
       }
 
+      saveLastGraphShape(graphBounds);
       sendMessage('CREATE_GRAPH', payload);
     }
   }, [graphBounds, exclusionZones, sendMessage]);
@@ -459,11 +524,15 @@ function App() {
     }
   }, [showGraphNodes, activeGraph, graphNodes.length, sendMessage]);
 
-  // Reset graph bounds when switching between box/polygon mode
+  // Reset bounds only when the user switches shape type while already creating.
+  // Keep a restored last-submitted shape when entering graphCreate.
   useEffect(() => {
-    if (mode === 'graphCreate') {
-      setGraphBounds(null);
-    }
+    if (mode !== 'graphCreate') return;
+    setGraphBounds((prev) => {
+      if (!prev) return prev;
+      if (prev.type === graphCreateMode) return prev;
+      return null;
+    });
   }, [graphCreateMode, mode]);
 
   return (
