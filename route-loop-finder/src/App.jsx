@@ -375,12 +375,12 @@ function App() {
         payload.center_lng = graphBounds.center.lng;
         payload.radius_miles = graphBounds.radiusMiles;
       } else {
-        // Box
+        // Box — min/max so swapped handles still make a valid OSM bbox
         const { nw, se } = graphBounds;
-        payload.south = se.lat;
-        payload.west = nw.lng;
-        payload.north = nw.lat;
-        payload.east = se.lng;
+        payload.south = Math.min(nw.lat, se.lat);
+        payload.north = Math.max(nw.lat, se.lat);
+        payload.west = Math.min(nw.lng, se.lng);
+        payload.east = Math.max(nw.lng, se.lng);
       }
 
       saveLastGraphShape(graphBounds);

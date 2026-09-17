@@ -609,21 +609,21 @@ class GraphManager:
             plot("02_prune_after.png", "After prune", G)
 
         # 3. Consolidate complex intersections
-        print("  Consolidating intersections...")
-        cons_nodes = GraphManager._consolidation_cluster_nodes(G, tolerance=40)
-        plot(
-            "03_consolidate_will_merge.png",
-            "Consolidate intersections (15m): red = nodes in merge clusters",
-            G,
-            cons_nodes,
-        )
-        G_proj = ox.project_graph(G)
-        G_proj_cons = ox.simplification.consolidate_intersections(
-            G_proj, rebuild_graph=True, tolerance=15, dead_ends=False
-        )
-        G = ox.project_graph(G_proj_cons, to_crs='epsg:4326')
-        print(f"  After consolidation: {len(G.nodes)} nodes, {len(G.edges)} edges")
-        plot("04_consolidate_after.png", "After intersection consolidation", G)
+        # print("  Consolidating intersections...")
+        # cons_nodes = GraphManager._consolidation_cluster_nodes(G, tolerance=25)
+        # plot(
+        #     "03_consolidate_will_merge.png",
+        #     "Consolidate intersections (15m): red = nodes in merge clusters",
+        #     G,
+        #     cons_nodes,
+        # )
+        # G_proj = ox.project_graph(G)
+        # G_proj_cons = ox.simplification.consolidate_intersections(
+        #     G_proj, rebuild_graph=True, tolerance=25, dead_ends=False
+        # )
+        # G = ox.project_graph(G_proj_cons, to_crs='epsg:4326')
+        # print(f"  After consolidation: {len(G.nodes)} nodes, {len(G.edges)} edges")
+        # plot("04_consolidate_after.png", "After intersection consolidation", G)
 
         # 4. Keep only shortest edge between node pairs
         # GraphManager._keep_shortest_edge(G)
@@ -716,15 +716,30 @@ class GraphManager:
         print(f"Graph saved at: {file_path}")
         return name
 
+    @staticmethod
+    def _canonical_bbox(south, west, north, east):
+        """Order corners geographically. Handles swapped NW/SE handles from the UI."""
+        south, north = min(south, north), max(south, north)
+        west, east = min(west, east), max(west, east)
+        return south, west, north, east
+
+    @staticmethod
+    def _osmnx_bbox_tuple(south, west, north, east):
+        """OSMnx 1.x wants (north, south, east, west); 2.x wants (left, bottom, right, top)."""
+        major = int(ox.__version__.split(".")[0])
+        if major >= 2:
+            return (west, south, east, north)
+        return (north, south, east, west)
+
     def generate_graph(self, name: str, south: float, west: float, north: float, east: float,
                        custom_filter: str = '["highway"~"trunk|cycleway|path|primary|secondary|tertiary|residential|primary_link|secondary_link|tertiary_link|road|living_street|bridleway|path"]',
                        exclusion_zones: list = None):
         """Downloads, processes, and saves a new graph from OSMnx using bounding box."""
+        south, west, north, east = self._canonical_bbox(south, west, north, east)
         print(f"Generating graph '{name}' for bbox: S={south}, W={west}, N={north}, E={east}")
-        
-        # OSMnx 1.8+ format: bbox is (left, bottom, right, top) in EPSG:4326
+
         G = ox.graph_from_bbox(
-            bbox=(west, south, east, north),
+            bbox=self._osmnx_bbox_tuple(south, west, north, east),
             network_type='all',
             simplify=True,
             custom_filter=custom_filter
