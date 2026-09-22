@@ -39,6 +39,7 @@ function ControlPanel({
     onUndo,
     genSettings,
     setGenSettings,
+    algorithms,
     graphs,
     activeGraph,
     onSwitchGraph,
@@ -69,12 +70,22 @@ function ControlPanel({
     const [isMinimized, setIsMinimized] = useState(false);
 
     const handleSettingChange = (e) => {
-        const { name, value, type } = e.target;
+        const { name, value, type, checked } = e.target;
         setGenSettings(prev => ({
             ...prev,
-            [name]: type === 'number' ? parseFloat(value) : value
+            [name]: type === 'checkbox' ? checked
+                : type === 'number' ? parseFloat(value)
+                    : value
         }));
     };
+
+    const algorithmOptions = (algorithms && algorithms.length > 0)
+        ? algorithms
+        : [
+            { id: 'turns', label: 'Turns-first (baseline)' },
+            { id: 'turns_pruned', label: 'Turns-first + self-cross prune + A*' },
+            { id: 'turns_capped', label: 'Turns-first + capped state space' },
+        ];
 
     return (
         <div className="control-panel">
@@ -238,6 +249,32 @@ function ControlPanel({
                                 </label>
 
                                 <label className="setting-item full-width">
+                                    <span>Algorithm</span>
+                                    <select
+                                        name="algorithm"
+                                        value={genSettings.algorithm || 'turns'}
+                                        onChange={handleSettingChange}
+                                    >
+                                        {algorithmOptions.map(opt => (
+                                            <option key={opt.id} value={opt.id}>{opt.label}</option>
+                                        ))}
+                                    </select>
+                                </label>
+
+                                {genSettings.algorithm === 'turns_capped' && (
+                                    <label className="setting-item full-width">
+                                        <span>Cap per node/bucket</span>
+                                        <input
+                                            type="number"
+                                            name="cap_k"
+                                            value={genSettings.cap_k ?? 3}
+                                            onChange={handleSettingChange}
+                                            min="1" max="50" step="1"
+                                        />
+                                    </label>
+                                )}
+
+                                <label className="setting-item full-width">
                                     <span>Dedup</span>
                                     <select
                                         name="deduplication"
@@ -270,6 +307,29 @@ function ControlPanel({
                                             value={genSettings.min_dist_m || 50}
                                             onChange={handleSettingChange}
                                             min="10" max="1000" step="10"
+                                        />
+                                    </label>
+                                )}
+
+                                <div className="control-panel__section-title" style={{ marginTop: '8px' }}>Debug</div>
+                                <label className="checkbox-item" style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px' }}>
+                                    <input
+                                        type="checkbox"
+                                        name="debug_snapshots"
+                                        checked={!!genSettings.debug_snapshots}
+                                        onChange={handleSettingChange}
+                                    />
+                                    Save search snapshots
+                                </label>
+                                {genSettings.debug_snapshots && (
+                                    <label className="setting-item full-width">
+                                        <span>Snapshot every N pops</span>
+                                        <input
+                                            type="number"
+                                            name="snapshot_every"
+                                            value={genSettings.snapshot_every || 25000}
+                                            onChange={handleSettingChange}
+                                            min="1000" max="1000000" step="1000"
                                         />
                                     </label>
                                 )}

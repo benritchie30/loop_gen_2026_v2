@@ -145,6 +145,11 @@ function App() {
   const [isCreatingGraph, setIsCreatingGraph] = useState(false);
   const [graphCreateMode, setGraphCreateMode] = useState('box'); // 'box' or 'polygon'
   const [graphBoundaries, setGraphBoundaries] = useState({});
+  const [algorithms, setAlgorithms] = useState([
+    { id: 'turns', label: 'Turns-first (baseline)' },
+    { id: 'turns_pruned', label: 'Turns-first + self-cross prune + A*' },
+    { id: 'turns_capped', label: 'Turns-first + capped state space' },
+  ]);
 
   // Ref for path tool undo handler
   const pathUndoRef = useRef(null);
@@ -262,6 +267,12 @@ function App() {
           setGraphNodes(message.nodes || []);
           break;
 
+        case 'ALGORITHMS_LIST':
+          if (Array.isArray(message.algorithms) && message.algorithms.length > 0) {
+            setAlgorithms(message.algorithms);
+          }
+          break;
+
         default:
           console.log('[App] Unknown message type:', message.type);
       }
@@ -331,17 +342,31 @@ function App() {
 
   // Generator Settings State
   const [genSettings, setGenSettings] = useState(() => {
-    const saved = localStorage.getItem('generatorSettings');
-    return saved ? JSON.parse(saved) : {
+    const defaults = {
       min_path_len: 15,
       max_path_len: 40,
       loop_ratio: 0.5,
       sim_ceiling: 0.7,
       num_paths: 30,
-      algorithm: 'scenic', // 'scenic' or 'direct'
-      deduplication: 'centroid', // 'centroid' or 'jaccard'
-      min_dist_m: 50 // Centroid distance threshold in meters
+      algorithm: 'turns',
+      deduplication: 'centroid',
+      min_dist_m: 50,
+      cap_k: 3,
+      debug_snapshots: false,
+      snapshot_every: 25000,
     };
+    try {
+      const saved = localStorage.getItem('generatorSettings');
+      if (!saved) return defaults;
+      const parsed = JSON.parse(saved);
+      const legacy = { scenic: 'turns', direct: 'turns', turn: 'turns' };
+      if (legacy[parsed.algorithm]) {
+        parsed.algorithm = legacy[parsed.algorithm];
+      }
+      return { ...defaults, ...parsed };
+    } catch {
+      return defaults;
+    }
   });
 
   // Save settings to localStorage whenever they change
@@ -601,6 +626,7 @@ function App() {
         onUndo={undoLastSelection}
         genSettings={genSettings}
         setGenSettings={setGenSettings}
+        algorithms={algorithms}
         graphs={graphs}
         activeGraph={activeGraph}
         onSwitchGraph={handleSwitchGraph}
