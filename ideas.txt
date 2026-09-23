@@ -6,9 +6,57 @@ click on edges to display paths including those nodes/edges
 -either works like laso or selector
 -can click them on or off
 
-Make boundary/shape of most recent submited graph for download the start shape when you go to make a new one
+Done: Make boundary/shape of most recent submited graph for download the start shape when you go to make a new one
 make show path preview on by default. or last seleted graph. 
 
 remove jacard similarity as an option for dedup. Remove the dedup selector on input box. 
 
 How can I set up the project for it to be easier to test. like the agent can run different inputs
+
+consolidate intersections must have x many nodes to be counted as intersection. it is combining nearby nodes that aren't intersection
+
+Do I need to chache graphs if they are all different sizes and wont have identical queries?
+
+Have a button that stops generation
+
+Need to deal with bad path that follows there and back on 2 lane road
+
+what is the best way for the user to page through paths?
+I want them to be able to see options without paging through too many mostly idential routes
+I want them to be like oh i like this area let me see routes there without having to do anything to complicated
+
+Have all display settings saved between refreshes: preview opacity, checkboxes like show path preview or arrows
+
+have way to view where the algorithm is walking for debuging. I guess it could give screenshots every x number of rounds of nodes visited
+
+Sometimes i wouldn't be able to make a loop from a node but i could do a lollypop but it is removed by simplifying.
+So we need to include dead end roads in options for starting points but not in loop algorithm.
+Append path to closest starting point to node
+
+Selector/lasso only works after algorithm finishes
+
+
+what is the best way for the user to page through paths?
+I want them to be able to see options without paging through too many mostly idential routes
+I want them to be like oh i like this area let me see routes there without having to do anything to complicated
+click on edge then show paths with that edge
+like selector tool or not. Just for like exploring
+
+ability to edit paths i like
+ability to save paths I like
+
+with edge toggle. toggle on/off entire road name hold ctrl
+
+Queue based on time spent on desirable roads
+
+have distance buffer to cross a road even if it is toggled off
+if two turns happen withing small distance don't increment turns
+
+Thoughts:
+Prioritizing number of turns gives paths mostly on main roads and not any on neigborhood roads on large distances
+do we have to optimize by turns?
+
+discomfort algo seems to work well. Weights might need tuning. Tertiary roads in charlotte are still too trafficked
+maybe tertiary shouldn't be zero discomfort cost. But tertiary in rural areas might not get much traffick and could 
+be desired over residential. 
+Advanced input mode where I can input the weights for different road types. ask agent to give me combinations to test out

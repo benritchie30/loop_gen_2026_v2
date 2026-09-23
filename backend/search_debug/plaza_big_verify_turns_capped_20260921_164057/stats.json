@@ -1,0 +1,22 @@
+[
+  {
+    "snapshot": 1,
+    "iters": 20000,
+    "unique_nodes": 1253,
+    "max_dist_m": 14232.2,
+    "queue": 10682,
+    "yielded": 0,
+    "elapsed_s": 1.35,
+    "file": "001_iter20000.png"
+  },
+  {
+    "snapshot": 2,
+    "iters": 38557,
+    "unique_nodes": 1352,
+    "max_dist_m": 17016.5,
+    "queue": 14544,
+    "yielded": 3,
+    "elapsed_s": 2.13,
+    "file": "002_iter38557.png"
+  }
+]

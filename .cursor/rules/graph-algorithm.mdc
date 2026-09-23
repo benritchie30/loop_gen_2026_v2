@@ -1,6 +1,6 @@
 ---
 description: Pathfinding heuristics, graph simplification intent, and gotchas
-globs: backend/loop_generator.py,backend/graph_manager.py,backend/server.py
+globs: backend/loop_generator.py,backend/graph_manager.py,backend/road_stress.py,backend/server.py,backend/search_debug.py
 alwaysApply: false
 ---
 
@@ -8,23 +8,43 @@ alwaysApply: false
 
 ## Search
 
-`find_paths` always uses the turn-then-distance heap (`find_paths_turns_dist`). Do not "wire up" the unused `algorithm` / `"scenic"` flag unless asked.
+`find_paths` dispatches via the `ALGORITHMS` registry in `loop_generator.py`. Keys:
 
-Turns-first is intentional: it surfaces simple, followable corridors and finds loops faster than distance-only search, which meanders. A turn is a ≥30° bearing change. Immediate U-turns are skipped.
+- `turns` — baseline turns-then-distance heap (legacy behavior, including expanding already-self-crossing paths before `min_path_length`).
+- `turns_pruned` — same ordering + self-cross prune + A* bound (`dist + shortest_back_to_start > max` skipped).
+- `turns_capped` — pruned + at most `cap_k` expansions per `(node, 0.5 mi distance bucket)`.
+- `pleasant_capped` — same prune, A* bound, and cap as `turns_capped`, but the heap key is `(turns + discomfort, distance, node_id)`.
 
-Tradeoff you must not "fix" casually: on dense city graphs the heap stays on short same-turn paths and barely explores. Rural graphs work well. The owner is open to other queue orderings but wants that quality-vs-coverage tradeoff respected.
+Legacy request names (`scenic`, `direct`, `turn`) map to `turns`. Do not invent new strategies without adding them to the registry and UI.
+
+Turns-first is intentional: it surfaces simple, followable corridors. A turn is a ≥30° bearing change. Immediate U-turns are skipped. `pleasant_capped` keeps that ordering among equally pleasant roads. Busy-road distance is added as turn-equivalents (`stress` per meter on each edge), so a mile on a primary sorts behind a neighborhood route with a few more corners.
+
+Discomfort for a yielded path is recomputed on the full lollipop (stem both ways). The reported turn count stays the one-way search count.
+
+`max_path_length` bounds the one-way search distance (stem + loop), not the full lollipop `2*stem + loop`. Reported `total_miles` can exceed the typed max.
 
 Uniqueness: the owner **only uses centroid dedup** (reject if sampled-geometry centroid is within `min_dist_m` of a kept path). Jaccard is leftover — it missed "same roads, different node IDs" at intersections. Prefer centroid if you touch uniqueness.
 
 `min_loop_length` is passed as 600 m from the server; ignore the unused 1000 m constant in the generator unless unifying them on purpose.
+
+Debug: `debug_snapshots` writes PNGs + `stats.json` under `backend/search_debug/<graph>_<algo>_<stamp>/` via `SearchDebugger` (Pillow-only drawing — avoid matplotlib here; Agg can segfault under QtAgg on Windows and `_debug_plot_graph` needs the interactive backend).
+
+## Edge stress
+
+`road_stress.annotate_edge_stress` writes `stress` (turn-equivalents per meter). Class rates per mile: residential / living_street / tertiary / unclassified / cycleway / path / pedestrian / bridleway = 0; secondary and `road` = 1; secondary_link = 1.5; primary = 4; primary_link = 5; trunk = 12. A list of classes uses the higher rate.
+
+Modifiers apply only when the class rate is already > 0: real bike facility (`lane`, `track`, `opposite_lane`, `opposite_track`, `separate`) ×0.25; sharrows ×0.6; 4+ lanes ×1.5; 6+ lanes ×2; maxspeed ≥ 50 mph ×1.5; maxspeed ≤ 25 mph ×0.7. `bicycle=no` or `dismount` on a free path is 1 turn per mile and does not delete the edge.
+
+If free edges are under 35% of length, positive stresses are multiplied by 0.4 (rural graphs). Annotation runs before degree-2 merge; the merge length-weights `stress` and keeps highway / name / bike tags from the longer piece. Saved graphs without `stress` are annotated in memory on load from `highway` only — re-download to pick up `unclassified`, `pedestrian`, bike lanes, lanes, and maxspeed.
+
+Download filter: `trunk`, `trunk_link`, `primary`, `primary_link`, `secondary`, `secondary_link`, `tertiary`, `tertiary_link`, `unclassified`, `residential`, `living_street`, `pedestrian`, `cycleway`, `path`, `bridleway`, `road`. Not included: `footway` (sidewalks), `service`, `track`.
+
+## Crossing exemption
+
+Only in `pleasant_capped`. When the edge just traversed is ≤ 160 m, strictly busier than the edge before it and the edge after it, and both junctions are ≥30° turns, the exit turn is not added (the pair costs one turn) and that edge's discomfort is refunded down to 0.15. A residential grid corner still counts. No exemption on the first edge.
 
 ## Simplification
 
 Intent: downloaded MultiDiGraph → keep topology useful for loops (merge through-nodes, drop true dead-ends). Extra steps currently in `_process_graph`: 3 km biconnected-component prune (dead-ends **and** small loops), 15 m intersection consolidation, then degree-2 merges.
 
 **Keep shortest parallel multi-edge** is intended (algorithm should not have to handle rare parallel OSM edges) but that call is commented out. If you restore it, that is aligning with intent, not a new idea.
-
-When merging geometries in `_remove_node_and_merge`, the same `geometry` is written on `u→v` and `v→u`. Be careful changing merge/elevation/sampling: the elevation hover already skips, runs backward, and mismatches the map. Treat reverse-edge orientation as the leading suspect; do not "fix" profiles by resampling blindly without checking edge direction.
-
-
-Graph create: even tiny bboxes trigger Overpass "tens of thousands times max query area". Suspect bbox argument order vs the installed OSMnx version (west/south/east/north vs north/south/east/west), not a truly huge region. Check the OSMnx signature before changing download logic.

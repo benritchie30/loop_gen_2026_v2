@@ -1,0 +1,62 @@
+[
+  {
+    "snapshot": 1,
+    "iters": 25000,
+    "unique_nodes": 386,
+    "max_dist_m": 69525.5,
+    "queue": 7641,
+    "yielded": 16,
+    "elapsed_s": 4.9,
+    "file": "001_iter25000.png"
+  },
+  {
+    "snapshot": 2,
+    "iters": 50000,
+    "unique_nodes": 413,
+    "max_dist_m": 73689.2,
+    "queue": 11909,
+    "yielded": 51,
+    "elapsed_s": 17.86,
+    "file": "002_iter50000.png"
+  },
+  {
+    "snapshot": 3,
+    "iters": 75000,
+    "unique_nodes": 433,
+    "max_dist_m": 93034.3,
+    "queue": 13779,
+    "yielded": 88,
+    "elapsed_s": 35.42,
+    "file": "003_iter75000.png"
+  },
+  {
+    "snapshot": 4,
+    "iters": 100000,
+    "unique_nodes": 437,
+    "max_dist_m": 96188.0,
+    "queue": 13652,
+    "yielded": 170,
+    "elapsed_s": 80.99,
+    "file": "004_iter100000.png"
+  },
+  {
+    "snapshot": 5,
+    "iters": 125000,
+    "unique_nodes": 439,
+    "max_dist_m": 105089.4,
+    "queue": 13615,
+    "yielded": 286,
+    "elapsed_s": 173.81,
+    "file": "005_iter125000.png"
+  },
+  {
+    "snapshot": 6,
+    "iters": 126971,
+    "unique_nodes": 439,
+    "max_dist_m": 105089.4,
+    "queue": 13518,
+    "yielded": 300,
+    "elapsed_s": 186.25,
+    "file": "006_iter126971.png"
+  }
+]

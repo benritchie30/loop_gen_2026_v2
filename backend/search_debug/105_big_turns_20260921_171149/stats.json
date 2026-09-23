@@ -1,0 +1,412 @@
+[
+  {
+    "snapshot": 1,
+    "iters": 25000,
+    "unique_nodes": 213,
+    "max_dist_m": 25938.9,
+    "queue": 26173,
+    "yielded": 0,
+    "elapsed_s": 1.18,
+    "file": "001_iter25000.png"
+  },
+  {
+    "snapshot": 2,
+    "iters": 50000,
+    "unique_nodes": 251,
+    "max_dist_m": 32618.5,
+    "queue": 52678,
+    "yielded": 0,
+    "elapsed_s": 2.26,
+    "file": "002_iter50000.png"
+  },
+  {
+    "snapshot": 3,
+    "iters": 75000,
+    "unique_nodes": 258,
+    "max_dist_m": 32618.5,
+    "queue": 78975,
+    "yielded": 0,
+    "elapsed_s": 3.67,
+    "file": "003_iter75000.png"
+  },
+  {
+    "snapshot": 4,
+    "iters": 100000,
+    "unique_nodes": 264,
+    "max_dist_m": 32618.5,
+    "queue": 105737,
+    "yielded": 0,
+    "elapsed_s": 4.9,
+    "file": "004_iter100000.png"
+  },
+  {
+    "snapshot": 5,
+    "iters": 125000,
+    "unique_nodes": 290,
+    "max_dist_m": 42544.4,
+    "queue": 132205,
+    "yielded": 0,
+    "elapsed_s": 5.93,
+    "file": "005_iter125000.png"
+  },
+  {
+    "snapshot": 6,
+    "iters": 150000,
+    "unique_nodes": 290,
+    "max_dist_m": 42544.4,
+    "queue": 159188,
+    "yielded": 0,
+    "elapsed_s": 7.0,
+    "file": "006_iter150000.png"
+  },
+  {
+    "snapshot": 7,
+    "iters": 175000,
+    "unique_nodes": 290,
+    "max_dist_m": 42544.4,
+    "queue": 185747,
+    "yielded": 0,
+    "elapsed_s": 7.87,
+    "file": "007_iter175000.png"
+  },
+  {
+    "snapshot": 8,
+    "iters": 200000,
+    "unique_nodes": 290,
+    "max_dist_m": 42544.4,
+    "queue": 211881,
+    "yielded": 0,
+    "elapsed_s": 9.13,
+    "file": "008_iter200000.png"
+  },
+  {
+    "snapshot": 9,
+    "iters": 225000,
+    "unique_nodes": 290,
+    "max_dist_m": 42544.4,
+    "queue": 237597,
+    "yielded": 0,
+    "elapsed_s": 10.14,
+    "file": "009_iter225000.png"
+  },
+  {
+    "snapshot": 10,
+    "iters": 250000,
+    "unique_nodes": 290,
+    "max_dist_m": 42544.4,
+    "queue": 263709,
+    "yielded": 0,
+    "elapsed_s": 11.48,
+    "file": "010_iter250000.png"
+  },
+  {
+    "snapshot": 11,
+    "iters": 275000,
+    "unique_nodes": 290,
+    "max_dist_m": 42544.4,
+    "queue": 290201,
+    "yielded": 0,
+    "elapsed_s": 12.4,
+    "file": "011_iter275000.png"
+  },
+  {
+    "snapshot": 12,
+    "iters": 300000,
+    "unique_nodes": 291,
+    "max_dist_m": 42544.4,
+    "queue": 317066,
+    "yielded": 0,
+    "elapsed_s": 13.81,
+    "file": "012_iter300000.png"
+  },
+  {
+    "snapshot": 13,
+    "iters": 325000,
+    "unique_nodes": 291,
+    "max_dist_m": 42544.4,
+    "queue": 344358,
+    "yielded": 0,
+    "elapsed_s": 14.82,
+    "file": "013_iter325000.png"
+  },
+  {
+    "snapshot": 14,
+    "iters": 350000,
+    "unique_nodes": 299,
+    "max_dist_m": 42544.4,
+    "queue": 371873,
+    "yielded": 0,
+    "elapsed_s": 15.86,
+    "file": "014_iter350000.png"
+  },
+  {
+    "snapshot": 15,
+    "iters": 375000,
+    "unique_nodes": 302,
+    "max_dist_m": 42544.4,
+    "queue": 398587,
+    "yielded": 0,
+    "elapsed_s": 17.32,
+    "file": "015_iter375000.png"
+  },
+  {
+    "snapshot": 16,
+    "iters": 400000,
+    "unique_nodes": 305,
+    "max_dist_m": 42544.4,
+    "queue": 424789,
+    "yielded": 0,
+    "elapsed_s": 18.19,
+    "file": "016_iter400000.png"
+  },
+  {
+    "snapshot": 17,
+    "iters": 425000,
+    "unique_nodes": 305,
+    "max_dist_m": 42544.4,
+    "queue": 450676,
+    "yielded": 0,
+    "elapsed_s": 19.06,
+    "file": "017_iter425000.png"
+  },
+  {
+    "snapshot": 18,
+    "iters": 450000,
+    "unique_nodes": 305,
+    "max_dist_m": 42544.4,
+    "queue": 476989,
+    "yielded": 0,
+    "elapsed_s": 20.61,
+    "file": "018_iter450000.png"
+  },
+  {
+    "snapshot": 19,
+    "iters": 475000,
+    "unique_nodes": 305,
+    "max_dist_m": 42544.4,
+    "queue": 503485,
+    "yielded": 0,
+    "elapsed_s": 21.69,
+    "file": "019_iter475000.png"
+  },
+  {
+    "snapshot": 20,
+    "iters": 500000,
+    "unique_nodes": 313,
+    "max_dist_m": 42544.4,
+    "queue": 529665,
+    "yielded": 0,
+    "elapsed_s": 22.69,
+    "file": "020_iter500000.png"
+  },
+  {
+    "snapshot": 21,
+    "iters": 525000,
+    "unique_nodes": 341,
+    "max_dist_m": 50806.3,
+    "queue": 556446,
+    "yielded": 0,
+    "elapsed_s": 23.62,
+    "file": "021_iter525000.png"
+  },
+  {
+    "snapshot": 22,
+    "iters": 550000,
+    "unique_nodes": 341,
+    "max_dist_m": 50806.3,
+    "queue": 583952,
+    "yielded": 0,
+    "elapsed_s": 25.38,
+    "file": "022_iter550000.png"
+  },
+  {
+    "snapshot": 23,
+    "iters": 575000,
+    "unique_nodes": 341,
+    "max_dist_m": 50806.3,
+    "queue": 610845,
+    "yielded": 0,
+    "elapsed_s": 26.34,
+    "file": "023_iter575000.png"
+  },
+  {
+    "snapshot": 24,
+    "iters": 600000,
+    "unique_nodes": 341,
+    "max_dist_m": 50806.3,
+    "queue": 637116,
+    "yielded": 0,
+    "elapsed_s": 27.33,
+    "file": "024_iter600000.png"
+  },
+  {
+    "snapshot": 25,
+    "iters": 625000,
+    "unique_nodes": 341,
+    "max_dist_m": 50806.3,
+    "queue": 663660,
+    "yielded": 0,
+    "elapsed_s": 28.35,
+    "file": "025_iter625000.png"
+  },
+  {
+    "snapshot": 26,
+    "iters": 650000,
+    "unique_nodes": 341,
+    "max_dist_m": 50806.3,
+    "queue": 689994,
+    "yielded": 0,
+    "elapsed_s": 29.37,
+    "file": "026_iter650000.png"
+  },
+  {
+    "snapshot": 27,
+    "iters": 675000,
+    "unique_nodes": 341,
+    "max_dist_m": 50806.3,
+    "queue": 716345,
+    "yielded": 0,
+    "elapsed_s": 33.24,
+    "file": "027_iter675000.png"
+  },
+  {
+    "snapshot": 28,
+    "iters": 700000,
+    "unique_nodes": 341,
+    "max_dist_m": 50806.3,
+    "queue": 742693,
+    "yielded": 0,
+    "elapsed_s": 34.57,
+    "file": "028_iter700000.png"
+  },
+  {
+    "snapshot": 29,
+    "iters": 725000,
+    "unique_nodes": 341,
+    "max_dist_m": 50806.3,
+    "queue": 769150,
+    "yielded": 0,
+    "elapsed_s": 36.5,
+    "file": "029_iter725000.png"
+  },
+  {
+    "snapshot": 30,
+    "iters": 750000,
+    "unique_nodes": 341,
+    "max_dist_m": 50806.3,
+    "queue": 795513,
+    "yielded": 0,
+    "elapsed_s": 39.31,
+    "file": "030_iter750000.png"
+  },
+  {
+    "snapshot": 31,
+    "iters": 775000,
+    "unique_nodes": 341,
+    "max_dist_m": 50806.3,
+    "queue": 821898,
+    "yielded": 0,
+    "elapsed_s": 42.2,
+    "file": "031_iter775000.png"
+  },
+  {
+    "snapshot": 32,
+    "iters": 800000,
+    "unique_nodes": 341,
+    "max_dist_m": 50806.3,
+    "queue": 848453,
+    "yielded": 0,
+    "elapsed_s": 44.9,
+    "file": "032_iter800000.png"
+  },
+  {
+    "snapshot": 33,
+    "iters": 825000,
+    "unique_nodes": 341,
+    "max_dist_m": 50806.3,
+    "queue": 874978,
+    "yielded": 0,
+    "elapsed_s": 45.96,
+    "file": "033_iter825000.png"
+  },
+  {
+    "snapshot": 34,
+    "iters": 850000,
+    "unique_nodes": 341,
+    "max_dist_m": 50806.3,
+    "queue": 901388,
+    "yielded": 0,
+    "elapsed_s": 47.37,
+    "file": "034_iter850000.png"
+  },
+  {
+    "snapshot": 35,
+    "iters": 875000,
+    "unique_nodes": 341,
+    "max_dist_m": 50806.3,
+    "queue": 927810,
+    "yielded": 0,
+    "elapsed_s": 48.39,
+    "file": "035_iter875000.png"
+  },
+  {
+    "snapshot": 36,
+    "iters": 900000,
+    "unique_nodes": 341,
+    "max_dist_m": 50806.3,
+    "queue": 954056,
+    "yielded": 0,
+    "elapsed_s": 49.45,
+    "file": "036_iter900000.png"
+  },
+  {
+    "snapshot": 37,
+    "iters": 925000,
+    "unique_nodes": 341,
+    "max_dist_m": 50806.3,
+    "queue": 980207,
+    "yielded": 0,
+    "elapsed_s": 50.49,
+    "file": "037_iter925000.png"
+  },
+  {
+    "snapshot": 38,
+    "iters": 950000,
+    "unique_nodes": 341,
+    "max_dist_m": 50806.3,
+    "queue": 1006525,
+    "yielded": 0,
+    "elapsed_s": 51.5,
+    "file": "038_iter950000.png"
+  },
+  {
+    "snapshot": 39,
+    "iters": 975000,
+    "unique_nodes": 341,
+    "max_dist_m": 50806.3,
+    "queue": 1032797,
+    "yielded": 0,
+    "elapsed_s": 54.07,
+    "file": "039_iter975000.png"
+  },
+  {
+    "snapshot": 40,
+    "iters": 1000000,
+    "unique_nodes": 341,
+    "max_dist_m": 50806.3,
+    "queue": 1059039,
+    "yielded": 0,
+    "elapsed_s": 55.28,
+    "file": "040_iter1000000.png"
+  },
+  {
+    "snapshot": 41,
+    "iters": 1000001,
+    "unique_nodes": 341,
+    "max_dist_m": 50806.3,
+    "queue": 1059041,
+    "yielded": 0,
+    "elapsed_s": 55.36,
+    "file": "041_iter1000001.png"
+  }
+]

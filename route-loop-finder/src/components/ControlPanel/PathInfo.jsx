@@ -41,6 +41,13 @@ function PathInfo({ path }) {
             </div>
 
             <div className="path-info__item">
+                <span className="path-info__label">Discomfort</span>
+                <span className="path-info__value">
+                    {typeof props.discomfort === 'number' ? props.discomfort.toFixed(1) : '—'}
+                </span>
+            </div>
+
+            <div className="path-info__item">
                 <span className="path-info__label">Climb Distance</span>
                 <span className="path-info__value">{formatClimbing(totalClimb)}</span>
             </div>

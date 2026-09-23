@@ -8,6 +8,7 @@ from shapely.ops import linemerge
 import srtm
 from pyproj import Geod
 import functools
+from road_stress import CROSSING_CAP, CROSSING_MAX_M, annotate_edge_stress
 
 # Constants
 MILES_PER_METER = 0.000621371
@@ -164,6 +165,99 @@ def weight_function_turns_dist(G, u_node, v, current_turns, current_dist):
         current_turns += 1
 
     return current_turns, new_dist
+
+
+def _edge_data(G, u, v):
+    """First parallel edge from u to v, or None."""
+    try:
+        return G[u][v][0]
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def pleasant_extend(G, prev_prev, prev, curr, nxt, turns, dist, discomfort):
+    """One pleasant-search step from curr to nxt.
+
+    prev is the node we arrived from (None at the start). prev_prev is the
+    node before that, used to recognize a short crossing.
+
+    A crossing is a short edge that is strictly busier than both the edge
+    before it and the edge after it, with a real turn onto it and off it.
+    The pair counts as one turn (the entry turn, already counted) and that
+    edge's discomfort is refunded down to CROSSING_CAP.
+    """
+    edge = _edge_data(G, curr, nxt)
+    if edge is None:
+        return turns, float('inf'), discomfort
+
+    length = float(edge.get('length') or 0)
+    new_dist = dist + length
+    new_discomfort = discomfort + float(edge.get('stress') or 0) * length
+    new_turns = turns
+
+    if prev is None:
+        return new_turns, new_dist, new_discomfort
+
+    exit_delta = _bearing_delta(
+        calculate_initial_bearing(G, prev, curr),
+        calculate_initial_bearing(G, curr, nxt),
+    )
+    exit_turn = exit_delta >= TURN_ANGLE_THRESHOLD_DEG
+    crossing = False
+
+    arrived = _edge_data(G, prev, curr)
+    if arrived is not None and exit_turn and prev_prev is not None:
+        arrived_len = float(arrived.get('length') or 0)
+        if arrived_len <= CROSSING_MAX_M:
+            entry_delta = _bearing_delta(
+                calculate_initial_bearing(G, prev_prev, prev),
+                calculate_initial_bearing(G, prev, curr),
+            )
+            if entry_delta >= TURN_ANGLE_THRESHOLD_DEG:
+                stress_arrived = float(arrived.get('stress') or 0)
+                incoming = _edge_data(G, prev_prev, prev)
+                stress_in = float(incoming.get('stress') or 0) if incoming is not None else 0.0
+                stress_next = float(edge.get('stress') or 0)
+                if stress_arrived > stress_in and stress_arrived > stress_next:
+                    crossing = True
+                    arrived_cost = stress_arrived * arrived_len
+                    new_discomfort -= arrived_cost - min(arrived_cost, CROSSING_CAP)
+
+    if not crossing and exit_turn:
+        new_turns += 1
+
+    if new_discomfort < 0:
+        new_discomfort = 0.0
+    return new_turns, new_dist, new_discomfort
+
+
+def score_pleasant_path(G, path):
+    """Discomfort along a full lollipop, stem included both ways.
+
+    Consecutive duplicate nodes at the loop junction are skipped. The returned
+    turn count is not what the UI shows; search reports the one-way count.
+    """
+    if not path:
+        return 0, 0.0
+    nodes = [path[0]]
+    for node in path[1:]:
+        if node != nodes[-1]:
+            nodes.append(node)
+
+    turns = 0
+    dist = 0.0
+    discomfort = 0.0
+    prev_prev = None
+    prev = None
+    for i in range(len(nodes) - 1):
+        curr = nodes[i]
+        nxt = nodes[i + 1]
+        turns, dist, discomfort = pleasant_extend(
+            G, prev_prev, prev, curr, nxt, turns, dist, discomfort
+        )
+        prev_prev = prev
+        prev = curr
+    return turns, discomfort
 
 
 
@@ -360,7 +454,8 @@ def _create_properties(
     total_climb_ft: float = 0.0,
     difficulty: float = 1.0,
     elevation_profile: List = None,
-    centroid: Optional[Tuple[float, float]] = None
+    centroid: Optional[Tuple[float, float]] = None,
+    discomfort: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Creates GeoJSON properties dictionary."""
     if centroid is None and elevation_profile:
@@ -371,7 +466,7 @@ def _create_properties(
         if lats:
             centroid = (round(sum(lats) / len(lats), 6), round(sum(lngs) / len(lngs), 6))
 
-    return {
+    properties = {
         'turns': turns,
         'visited': hex(visited_mask),
         'loop_ratio': round(loop_ratio, 3),
@@ -383,6 +478,9 @@ def _create_properties(
         'elevation_profile': elevation_profile or [],
         'centroid': centroid
     }
+    if discomfort is not None:
+        properties['discomfort'] = round(float(discomfort), 3)
+    return properties
 
 def path_to_geojson(
     G: nx.MultiDiGraph,
@@ -417,6 +515,58 @@ def path_to_geojson(
     }
 
 
+# Strategy registry. Baseline 'turns' must stay pop-for-pop identical to the
+# original turns-first search (no prune, no A*, no cap).
+ALGORITHMS: Dict[str, Dict[str, Any]] = {
+    'turns': {
+        'label': 'Turns-first (baseline)',
+        'prune_self_cross': False,
+        'astar_bound': False,
+        'node_bucket_cap': None,
+        'order': 'turns',
+    },
+    'turns_pruned': {
+        'label': 'Turns-first + self-cross prune + A*',
+        'prune_self_cross': True,
+        'astar_bound': True,
+        'node_bucket_cap': None,
+        'order': 'turns',
+    },
+    'turns_capped': {
+        'label': 'Turns-first + capped state space',
+        'prune_self_cross': True,
+        'astar_bound': True,
+        'node_bucket_cap': 3,  # overridden by cap_k when provided
+        'order': 'turns',
+    },
+    'pleasant_capped': {
+        'label': 'Pleasant roads (capped)',
+        'prune_self_cross': True,
+        'astar_bound': True,
+        'node_bucket_cap': 3,  # overridden by cap_k when provided
+        'order': 'pleasant',
+    },
+}
+
+BUCKET_M = 0.5 / MILES_PER_METER  # 0.5 miles in meters
+LEGACY_ALGORITHM_ALIASES = {'scenic': 'turns', 'direct': 'turns', 'turn': 'turns'}
+MAX_ITERS = 1000000  # overridable for tests
+PRINT_EVERY = 10000
+
+
+def list_algorithms() -> List[Dict[str, str]]:
+    """UI-facing list of {id, label} from the registry."""
+    return [{'id': k, 'label': v['label']} for k, v in ALGORITHMS.items()]
+
+
+def resolve_algorithm(name: Optional[str]) -> str:
+    """Map request / legacy names onto a registry key; unknown -> 'turns'."""
+    if not name:
+        return 'turns'
+    key = LEGACY_ALGORITHM_ALIASES.get(name, name)
+    return key if key in ALGORITHMS else 'turns'
+
+
 def find_paths_turns_dist(
     G: nx.MultiDiGraph,
     start_node: int,
@@ -426,123 +576,210 @@ def find_paths_turns_dist(
     similarity_ceiling: float,
     min_loop_length: float = MIN_LOOP_LENGTH_METERS,
     deduplication: str = 'centroid',
-    min_dist_m: float = 50.0
+    min_dist_m: float = 50.0,
+    prune_self_cross: bool = False,
+    astar_bound: bool = False,
+    node_bucket_cap: Optional[int] = None,
+    bucket_m: float = BUCKET_M,
+    algorithm_id: str = 'turns',
+    graph_name: str = 'graph',
+    debug_snapshots: bool = False,
+    snapshot_every: int = 25000,
+    order: str = 'turns',
 ) -> Generator[Dict[str, Any], None, None]:
-    """Yields unique loop paths meeting criteria using optimized Dijkstra-like search."""
-    # Priority queue: (turns, distance, node_id), current_node, visited_mask
-    queue = [((0, 0.0, start_node), PathNode(start_node), 0)]
+    """Yields unique loop paths using turns-then-distance heap search.
+
+    Options (all off for baseline 'turns'):
+      prune_self_cross: drop paths that revisit a node before min_path_length
+      astar_bound: skip states where dist + shortest_back_to_start > max
+      node_bucket_cap: at most K expansions per (node, distance-bucket)
+      order: 'turns' keeps the (turns, dist) heap. 'pleasant' uses
+        (turns + discomfort, dist) and the short-crossing exemption.
+    """
+    if order == 'pleasant' and G.number_of_edges():
+        _u, _v, sample = next(iter(G.edges(data=True)))
+        if 'stress' not in sample:
+            annotate_edge_stress(G)
+
+    if order == 'pleasant':
+        queue = [((0.0, 0.0, start_node), PathNode(start_node), 0, 0, 0.0)]
+    else:
+        queue = [((0, 0.0, start_node), PathNode(start_node), 0)]
     path_masks: Set[int] = set()
     existing_centroids: List[Tuple[float, float]] = []
+    bucket_slots: Dict[Tuple[int, int], int] = {}
 
-    # print(f"Starting loop detection... range {min_path_length}-{max_path_length}m")
-    
+    back_dist: Dict[int, float] = {}
+    if astar_bound:
+        try:
+            # Undirected shortest path back to start (lollipop stem returns the same way).
+            G_undir = G.to_undirected()
+            back_dist = nx.single_source_dijkstra_path_length(
+                G_undir, start_node, weight='length'
+            )
+        except Exception as e:
+            print(f"A* bound Dijkstra failed ({e}); continuing without bound")
+            back_dist = {}
+
+    debugger = None
+    if debug_snapshots:
+        try:
+            from search_debug import SearchDebugger
+            debugger = SearchDebugger(
+                G, start_node, algorithm_id, graph_name=graph_name,
+                snapshot_every=snapshot_every,
+            )
+        except Exception as e:
+            print(f"SearchDebugger init failed ({e})")
+
     iters = 0
     yielded = 0
     max_dist_reached = 0.0
-    MAX_ITERS = 1000000
-    PRINT_EVERY = 10000
-    # MAX_ITERS = 100000000
-    while queue:
-        iters += 1
-        if iters > MAX_ITERS:
-            print(f"Max iterations {MAX_ITERS} reached. Stopping.")
-            print(f"  queue={len(queue)}, yielded={yielded}, "
-                  f"max_dist_reached={max_dist_reached:.0f}m")
-            break
 
-        (turns, dist, _), curr_node, visited_mask = heapq.heappop(queue)
+    try:
+        while queue:
+            iters += 1
+            if iters > MAX_ITERS:
+                print(f"Max iterations {MAX_ITERS} reached. Stopping.")
+                print(f"  queue={len(queue)}, yielded={yielded}, "
+                      f"max_dist_reached={max_dist_reached:.0f}m")
+                break
 
-        if dist > max_dist_reached:
-            max_dist_reached = dist
+            if order == 'pleasant':
+                (_priority, dist, _), curr_node, visited_mask, turns, discomfort = heapq.heappop(queue)
+            else:
+                (turns, dist, _), curr_node, visited_mask = heapq.heappop(queue)
 
-        if iters % PRINT_EVERY == 0:
-            print(f"Iter {iters}: queue={len(queue)}, yielded={yielded}, "
-                  f"pop_dist={dist:.0f}m, pop_turns={turns}, "
-                  f"max_dist_reached={max_dist_reached:.0f}m")
-        
-        # Periodic status print
-        # Periodic status print
-        # if iters % 1 == 0:
-        #    print(f"Iter {iters}: Queue size {len(queue)}, Current dist {dist:.1f}, Turns {turns}")
+            if dist > max_dist_reached:
+                max_dist_reached = dist
 
-        if dist > max_path_length:
-            continue
+            if debugger is not None:
+                debugger.record_pop(curr_node.id)
+                debugger.maybe_snapshot(iters, len(queue), max_dist_reached, yielded)
 
-        # Detect loops when current node exists in visited mask
-        if (visited_mask & (1 << curr_node.id)) and (dist >= min_path_length):
-            # print(f"Iter {iters}: Loop detected at node {curr_node.id} traverse:")
-            # print(curr_node.traverse())
-            path_segment, loop_start = curr_node.traverse_to(curr_node.id)
-            if not path_segment or not loop_start:
-                # print(f"Iter {iters}: Loop detected but reconstruction failed")
+            if iters % PRINT_EVERY == 0:
+                print(f"Iter {iters}: queue={len(queue)}, yielded={yielded}, "
+                      f"pop_dist={dist:.0f}m, pop_turns={turns}, "
+                      f"max_dist_reached={max_dist_reached:.0f}m")
+
+            if dist > max_path_length:
                 continue
 
-            loop_dist = dist - loop_start.dist
-            # print(f"Loop dist: {loop_dist:.1f}m, dist: {dist:.1f}m, loop_start.dist: {loop_start.dist:.1f}m")
-            if loop_dist < min_loop_length:
-                # print(f"Iter {iters}: Loop too short ({loop_dist:.1f}m < {min_loop_length}m)")
-                continue
-
-            total_dist = 2 * loop_start.dist + loop_dist
-            loop_ratio = loop_dist / total_dist
-            
-            if loop_ratio < loop_ratio_floor:
-                # print(f"Iter {iters}: Loop ratio too low ({loop_ratio:.2f})")
-                continue
-
-            # Check path uniqueness
-            if visited_mask in path_masks:
-                # print(f"Iter {iters}: Path mask duplicate")
-                continue
-
-            centroid = None
-            out_back_section = loop_start.traverse() 
-            path = out_back_section + path_segment + out_back_section[::-1] 
-            # print(f"Path: {path}")
-            if deduplication == 'centroid':
-                centroid = _calculate_path_centroid(G, path)
-                if _is_centroid_too_close(centroid, existing_centroids, min_dist_m=min_dist_m):
-                    # print(f"Iter {iters}: Centroid too close")
-                    continue
-            elif deduplication == 'jaccard':
-                 if not _is_unique_path(visited_mask, path_masks, similarity_ceiling):
-                    # print(f"Iter {iters}: Jaccard overlap too high")
+            if astar_bound and back_dist:
+                remaining = back_dist.get(curr_node.id)
+                if remaining is not None and dist + remaining > max_path_length:
                     continue
 
-            # Yield valid path
-            # print(f"Iter {iters}: **Yielding valid path** (Turns: {turns}, Dist: {dist:.1f}m)")
-            
-            total_miles = total_dist * MILES_PER_METER
-            elev_profile, climb_ft, _ = compute_elevation_profile(G, path)
-            difficulty = compute_difficulty(total_miles, climb_ft)
-            properties = _create_properties(turns, visited_mask, loop_ratio, loop_dist, total_dist, path, climb_ft, difficulty, elev_profile, centroid)
-            geojson_feature = path_to_geojson(G, path, properties)
-            
-            if geojson_feature:
-                path_masks.add(visited_mask)
-                if centroid:
-                    existing_centroids.append(centroid)
-                yielded += 1
-                yield geojson_feature
+            revisiting = bool(visited_mask & (1 << curr_node.id))
 
-            continue
+            # Detect loops when current node exists in visited mask
+            if revisiting and (dist >= min_path_length):
+                path_segment, loop_start = curr_node.traverse_to(curr_node.id)
+                if not path_segment or not loop_start:
+                    continue
 
-        # Expand to neighbors
-        new_mask = visited_mask | (1 << curr_node.id)
-        
-        for neighbor in G.neighbors(curr_node.id):
-            if neighbor == getattr(curr_node.prev, 'id', None):
-                continue  # Skip immediate backtracking
+                loop_dist = dist - loop_start.dist
+                if loop_dist < min_loop_length:
+                    continue
 
-            new_turns, new_dist = weight_function_turns_dist(G, curr_node, neighbor, turns, dist)
-            tiebreaker = neighbor  # Ensures heap can compare elements
-            new_node = PathNode(neighbor, curr_node, new_dist)
-            
-            heapq.heappush(queue, (
-                (new_turns, new_dist, tiebreaker),
-                new_node,
-                new_mask
-            ))
+                total_dist = 2 * loop_start.dist + loop_dist
+                loop_ratio = loop_dist / total_dist
+
+                if loop_ratio < loop_ratio_floor:
+                    continue
+
+                if visited_mask in path_masks:
+                    continue
+
+                centroid = None
+                out_back_section = loop_start.traverse()
+                path = out_back_section + path_segment + out_back_section[::-1]
+                if deduplication == 'centroid':
+                    centroid = _calculate_path_centroid(G, path)
+                    if _is_centroid_too_close(centroid, existing_centroids, min_dist_m=min_dist_m):
+                        continue
+                elif deduplication == 'jaccard':
+                    if not _is_unique_path(visited_mask, path_masks, similarity_ceiling):
+                        continue
+
+                total_miles = total_dist * MILES_PER_METER
+                elev_profile, climb_ft, _ = compute_elevation_profile(G, path)
+                difficulty = compute_difficulty(total_miles, climb_ft)
+                reported_discomfort = None
+                if order == 'pleasant':
+                    _, reported_discomfort = score_pleasant_path(G, path)
+                properties = _create_properties(
+                    turns, visited_mask, loop_ratio, loop_dist, total_dist, path,
+                    climb_ft, difficulty, elev_profile, centroid,
+                    discomfort=reported_discomfort,
+                )
+                geojson_feature = path_to_geojson(G, path, properties)
+
+                if geojson_feature:
+                    path_masks.add(visited_mask)
+                    if centroid:
+                        existing_centroids.append(centroid)
+                    yielded += 1
+                    if debugger is not None:
+                        debugger.record_yield(path)
+                    yield geojson_feature
+
+                continue
+
+            # Self-cross before min length: baseline expands (legacy); pruned/capped stop.
+            if revisiting:
+                if prune_self_cross:
+                    continue
+                # Legacy: fall through and keep expanding (can produce sub-cycle loops).
+
+            # Cap checked after loop detection so closures are never suppressed.
+            if node_bucket_cap is not None:
+                slot = (curr_node.id, int(dist // bucket_m))
+                bucket_slots[slot] = bucket_slots.get(slot, 0) + 1
+                if bucket_slots[slot] > node_bucket_cap:
+                    continue
+
+            new_mask = visited_mask | (1 << curr_node.id)
+
+            for neighbor in G.neighbors(curr_node.id):
+                if neighbor == getattr(curr_node.prev, 'id', None):
+                    continue  # Skip immediate backtracking
+
+                tiebreaker = neighbor
+                if order == 'pleasant':
+                    prev = curr_node.prev
+                    prev_id = prev.id if prev is not None else None
+                    prev_prev_id = (
+                        prev.prev.id if prev is not None and prev.prev is not None else None
+                    )
+                    new_turns, new_dist, new_discomfort = pleasant_extend(
+                        G, prev_prev_id, prev_id, curr_node.id, neighbor,
+                        turns, dist, discomfort,
+                    )
+                    priority = new_turns + new_discomfort
+                    new_node = PathNode(neighbor, curr_node, new_dist)
+                    heapq.heappush(queue, (
+                        (priority, new_dist, tiebreaker),
+                        new_node,
+                        new_mask,
+                        new_turns,
+                        new_discomfort,
+                    ))
+                else:
+                    new_turns, new_dist = weight_function_turns_dist(
+                        G, curr_node, neighbor, turns, dist
+                    )
+                    new_node = PathNode(neighbor, curr_node, new_dist)
+
+                    heapq.heappush(queue, (
+                        (new_turns, new_dist, tiebreaker),
+                        new_node,
+                        new_mask
+                    ))
+    finally:
+        if debugger is not None:
+            debugger.finish(iters, len(queue), max_dist_reached, yielded)
+
 
 def find_paths(
     G: nx.MultiDiGraph,
@@ -552,10 +789,35 @@ def find_paths(
     loop_ratio_floor: float,
     similarity_ceiling: float,
     min_loop_length: float = MIN_LOOP_LENGTH_METERS,
-    algorithm: str = 'turn',
+    algorithm: str = 'turns',
     deduplication: str = 'centroid',
-    min_dist_m: float = 50.0
+    min_dist_m: float = 50.0,
+    cap_k: Optional[int] = None,
+    debug_snapshots: bool = False,
+    snapshot_every: int = 25000,
+    graph_name: str = 'graph',
 ) -> Generator[Dict[str, Any], None, None]:
-    """Dispatcher for path finding algorithms."""
-    # Algorithm parameter is ignored as we use turn-only
-    return find_paths_turns_dist(G, start_node, min_path_length, max_path_length, loop_ratio_floor, similarity_ceiling, min_loop_length, deduplication, min_dist_m)
+    """Dispatcher: look up strategy in ALGORITHMS and run the turns-first core."""
+    algo_id = resolve_algorithm(algorithm)
+    opts = ALGORITHMS[algo_id]
+    bucket_cap = opts['node_bucket_cap']
+    if bucket_cap is not None:
+        bucket_cap = int(cap_k) if cap_k is not None else int(bucket_cap)
+
+    print(f"Algorithm: {algo_id} ({opts['label']}) "
+          f"prune={opts['prune_self_cross']} astar={opts['astar_bound']} "
+          f"cap={bucket_cap} order={opts.get('order', 'turns')}")
+
+    return find_paths_turns_dist(
+        G, start_node, min_path_length, max_path_length,
+        loop_ratio_floor, similarity_ceiling, min_loop_length,
+        deduplication, min_dist_m,
+        prune_self_cross=opts['prune_self_cross'],
+        astar_bound=opts['astar_bound'],
+        node_bucket_cap=bucket_cap,
+        algorithm_id=algo_id,
+        graph_name=graph_name,
+        debug_snapshots=debug_snapshots,
+        snapshot_every=snapshot_every,
+        order=opts.get('order', 'turns'),
+    )

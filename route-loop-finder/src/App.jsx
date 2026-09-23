@@ -149,6 +149,7 @@ function App() {
     { id: 'turns', label: 'Turns-first (baseline)' },
     { id: 'turns_pruned', label: 'Turns-first + self-cross prune + A*' },
     { id: 'turns_capped', label: 'Turns-first + capped state space' },
+    { id: 'pleasant_capped', label: 'Pleasant roads (capped)' },
   ]);
 
   // Ref for path tool undo handler
@@ -348,7 +349,7 @@ function App() {
       loop_ratio: 0.5,
       sim_ceiling: 0.7,
       num_paths: 30,
-      algorithm: 'turns',
+      algorithm: 'pleasant_capped',
       deduplication: 'centroid',
       min_dist_m: 50,
       cap_k: 3,

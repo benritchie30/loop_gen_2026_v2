@@ -10,6 +10,23 @@ from shapely.ops import unary_union
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import srtm
+from road_stress import annotate_edge_stress
+
+# Overpass highway filter. `unclassified` is the quiet through-street below
+# tertiary. `pedestrian` streets are few and pleasant. Footways are omitted:
+# they are mostly sidewalks that duplicate the roadway.
+DEFAULT_CUSTOM_FILTER = (
+    '["highway"~"trunk|trunk_link|primary|primary_link|secondary|secondary_link|'
+    'tertiary|tertiary_link|unclassified|residential|living_street|pedestrian|'
+    'cycleway|path|bridleway|road"]'
+)
+
+# Kept through simplification so stress can see bike facilities, width, and speed.
+EDGE_ATTR_WHITELIST = {
+    'geometry', 'length', 'name', 'highway', 'ref',
+    'cycleway', 'cycleway:left', 'cycleway:right', 'cycleway:both',
+    'bicycle', 'lanes', 'maxspeed',
+}
 
 class GraphManager:
     _instance = None
@@ -49,9 +66,28 @@ class GraphManager:
                 with open(path, 'wb') as f:
                     pickle.dump(self._graph, f, pickle.HIGHEST_PROTOCOL)
                 print("Elevation data added and graph re-saved.")
+
+            # After any elevation rewrite, so stress stays in memory only.
+            self._ensure_edge_stress()
         except Exception as e:
             print(f"Error loading graph: {e}")
             raise
+
+    def _ensure_edge_stress(self):
+        """Annotate highway-class stress in memory when a saved graph has none.
+
+        Not written back: scoring is cheap, unlike the elevation migration.
+        Older graphs only have `highway`, so bike-lane and speed modifiers
+        wait until the graph is downloaded again.
+        """
+        G = self._graph
+        if G is None or G.number_of_edges() == 0:
+            return
+        _u, _v, sample = next(iter(G.edges(data=True)))
+        if 'stress' in sample:
+            return
+        print("Graph missing edge stress, annotating from highway tags...")
+        annotate_edge_stress(G)
 
     def switch_graph(self, name: str):
         """Switch to a different graph by name (without .gpickle extension)."""
@@ -245,27 +281,43 @@ class GraphManager:
         return mask
 
     @staticmethod
-    def _update_edge_names(G):
-        """Cleans up edge names from OSM data."""
-        for u, v, data in G.edges(data=True):
-            names = []
-            if 'ref' in data and 'name' not in data:
-                ref_value = data['ref']
-                if ';' in ref_value:
-                    names.extend(ref_value.split(';'))
+    def _coerce_name(name_data):
+        """Normalize an OSM name or ref into a string, a list, or None."""
+        if name_data is None:
+            return None
+        if isinstance(name_data, str):
+            if ';' in name_data:
+                parts = [part.strip() for part in name_data.split(';') if part.strip()]
+                if not parts:
+                    return None
+                return parts[0] if len(parts) == 1 else parts
+            text = name_data.strip()
+            return text or None
+        if isinstance(name_data, (list, tuple)):
+            flat = []
+            for item in name_data:
+                coerced = GraphManager._coerce_name(item)
+                if coerced is None:
+                    continue
+                if isinstance(coerced, list):
+                    flat.extend(coerced)
                 else:
-                    names.append(ref_value)
-            # if 'name' in data:
-            #     if isinstance(data['name'], str):
-            #         names.append(data['name'])
-            #     elif isinstance(data['name'], list):
-            #         names.extend(data['name'])
-            if len(names) == 0:
-                data['name'] = None
-            elif len(names) == 1:
-                data['name'] = names[0]
+                    flat.append(coerced)
+            if not flat:
+                return None
+            return flat[0] if len(flat) == 1 else flat
+        text = str(name_data).strip()
+        return text or None
+
+    @staticmethod
+    def _update_edge_names(G):
+        """Keep street names. Use `ref` only when the edge has no name."""
+        for u, v, data in G.edges(data=True):
+            existing = GraphManager._coerce_name(data.get('name')) if 'name' in data else None
+            if existing is not None:
+                data['name'] = existing
             else:
-                data['name'] = names
+                data['name'] = GraphManager._coerce_name(data.get('ref'))
             if 'ref' in data:
                 del data['ref']
 
@@ -314,9 +366,18 @@ class GraphManager:
         coords2 = _orient(list(geo2.coords), n_xy)
 
         fwd_geom = LineString(coords1[:-1] + coords2)
-        new_attr = attr_u.copy()
+        l1 = float(attr_u.get('length') or 0)
+        l2 = float(attr_v.get('length') or 0)
+        # Highway / name / bike tags follow the longer piece. Stress is the
+        # length-weighted average so a short busy segment is not forgotten.
+        longer = attr_v if l2 > l1 else attr_u
+        new_attr = longer.copy()
         new_attr['geometry'] = fwd_geom
-        new_attr['length'] = attr_u.get('length', 0) + attr_v.get('length', 0)
+        new_attr['length'] = l1 + l2
+        s1 = float(attr_u.get('stress') or 0)
+        s2 = float(attr_v.get('stress') or 0)
+        total_l = l1 + l2
+        new_attr['stress'] = ((s1 * l1 + s2 * l2) / total_l) if total_l > 0 else max(s1, s2)
 
         rev_attr = new_attr.copy()
         rev_attr['geometry'] = LineString(list(fwd_geom.coords)[::-1])
@@ -585,7 +646,7 @@ class GraphManager:
             )
 
         # 1. Strip non-essential edge attributes
-        whitelist = {'geometry', 'length', 'name', 'highway', 'ref'}
+        whitelist = EDGE_ATTR_WHITELIST
         for u, v, k, data in G.edges(keys=True, data=True):
             for key in [k for k in list(data.keys()) if k not in whitelist]:
                 data.pop(key)
@@ -628,7 +689,10 @@ class GraphManager:
         # 4. Keep only shortest edge between node pairs
         # GraphManager._keep_shortest_edge(G)
 
-        # 5. Merge degree-2 nodes
+        # 5. Score edges before degree-2 merge so each block keeps its own class.
+        annotate_edge_stress(G)
+
+        # 6. Merge degree-2 nodes
         deg2 = GraphManager._degree2_nodes(G)
         plot(
             "05_topology_will_merge.png",
@@ -639,7 +703,7 @@ class GraphManager:
         GraphManager._simplify_graph_topology(G)
         plot("06_topology_after.png", "After merging degree-2 nodes", G)
 
-        # 6. Remove self-loops and isolates
+        # 7. Remove self-loops and isolates
         # G.remove_edges_from(list(nx.selfloop_edges(G)))
         isolates = list(nx.isolates(G))
         if isolates:
@@ -732,7 +796,7 @@ class GraphManager:
         return (north, south, east, west)
 
     def generate_graph(self, name: str, south: float, west: float, north: float, east: float,
-                       custom_filter: str = '["highway"~"trunk|cycleway|path|primary|secondary|tertiary|residential|primary_link|secondary_link|tertiary_link|road|living_street|bridleway|path"]',
+                       custom_filter: str = DEFAULT_CUSTOM_FILTER,
                        exclusion_zones: list = None):
         """Downloads, processes, and saves a new graph from OSMnx using bounding box."""
         south, west, north, east = self._canonical_bbox(south, west, north, east)
@@ -752,7 +816,7 @@ class GraphManager:
         return self._finalize_and_save_graph(G, name, boundary_metadata, exclusion_zones)
 
     def generate_graph_from_polygon(self, name: str, coordinates: list,
-                                     custom_filter: str = '["highway"~"trunk|cycleway|path|primary|secondary|tertiary|residential|primary_link|secondary_link|tertiary_link|road|living_street|bridleway|path"]',
+                                     custom_filter: str = DEFAULT_CUSTOM_FILTER,
                                      exclusion_zones: list = None):
         """Downloads, processes, and saves a new graph from OSMnx using polygon boundary.
         coordinates: list of [lat, lng] pairs."""
@@ -775,7 +839,7 @@ class GraphManager:
 
     def generate_graph_from_circle(self, name: str, center_lat: float, center_lng: float,
                                     radius_miles: float,
-                                    custom_filter: str = '["highway"~"trunk|cycleway|path|primary|secondary|tertiary|residential|primary_link|secondary_link|tertiary_link|road|living_street|bridleway|path"]',
+                                    custom_filter: str = DEFAULT_CUSTOM_FILTER,
                                     exclusion_zones: list = None):
         """Downloads, processes, and saves a new graph from a circular boundary.
         radius_miles: radius in miles."""

@@ -85,6 +85,7 @@ function ControlPanel({
             { id: 'turns', label: 'Turns-first (baseline)' },
             { id: 'turns_pruned', label: 'Turns-first + self-cross prune + A*' },
             { id: 'turns_capped', label: 'Turns-first + capped state space' },
+            { id: 'pleasant_capped', label: 'Pleasant roads (capped)' },
         ];
 
     return (
@@ -261,7 +262,7 @@ function ControlPanel({
                                     </select>
                                 </label>
 
-                                {genSettings.algorithm === 'turns_capped' && (
+                                {(genSettings.algorithm === 'turns_capped' || genSettings.algorithm === 'pleasant_capped') && (
                                     <label className="setting-item full-width">
                                         <span>Cap per node/bucket</span>
                                         <input
@@ -469,6 +470,7 @@ function ControlPanel({
                                         <option value="total_climb_ft">Total Climbing Distance</option>
                                         <option value="loop_ratio">Loop Path Percentage</option>
                                         <option value="turns">Number of Turns</option>
+                                        <option value="discomfort">Discomfort</option>
                                         <option value="spatial">Spatial Flow</option>
                                     </select>
                                     <button

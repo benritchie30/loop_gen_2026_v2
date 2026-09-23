@@ -4,7 +4,7 @@ import json
 import uuid
 import os
 from graph_manager import GraphManager
-from loop_generator import find_paths
+from loop_generator import find_paths, list_algorithms
 
 # Configuration
 PORT = 8765
@@ -18,8 +18,9 @@ gm.set_graphs_dir(GRAPHS_DIR)
 async def handler(websocket):
     print(f"Client connected")
     
-    # Send available graphs list on connect
+    # Send available graphs and algorithms on connect
     await send_graphs_list(websocket)
+    await send_algorithms_list(websocket)
     
     try:
         async for message in websocket:
@@ -65,6 +66,13 @@ async def send_graphs_list(websocket):
         "graphs": graphs,
         "active": active,
         "boundaries": boundaries
+    }))
+
+async def send_algorithms_list(websocket):
+    """Send selectable pathfinding strategies to the client."""
+    await websocket.send(json.dumps({
+        "type": "ALGORITHMS_LIST",
+        "algorithms": list_algorithms()
     }))
 
 async def handle_switch_graph(websocket, data):
@@ -204,9 +212,14 @@ async def handle_start_generation(websocket, data):
     loop_ratio_floor = data.get("loop_ratio", 0.5)
     similarity_ceiling = data.get("sim_ceiling", 0.7)
     max_paths = data.get("num_paths", 50)
-    algorithm = data.get("algorithm", "scenic")
+    algorithm = data.get("algorithm", "turns")
     deduplication = data.get("deduplication", "centroid")
     min_dist_m = float(data.get("min_dist_m") or 50.0)
+    cap_k = data.get("cap_k")
+    cap_k = int(cap_k) if cap_k is not None else None
+    debug_snapshots = bool(data.get("debug_snapshots", False))
+    snapshot_every = int(data.get("snapshot_every") or 25000)
+    graph_name = gm.get_active_name() or "graph"
     
     print(f"Starting generation: {max_paths} paths, Alg: {algorithm}, Dedup: {deduplication}, MinDist: {min_dist_m}m, Range: {min_path_len/1609.34:.1f}-{max_path_len/1609.34:.1f}mi")
 
@@ -223,7 +236,11 @@ async def handle_start_generation(websocket, data):
         min_loop_length=600,
         algorithm=algorithm,
         deduplication=deduplication,
-        min_dist_m=min_dist_m
+        min_dist_m=min_dist_m,
+        cap_k=cap_k,
+        debug_snapshots=debug_snapshots,
+        snapshot_every=snapshot_every,
+        graph_name=graph_name,
     ):
         response = {
             "type": "PATH_RECEIVED",
