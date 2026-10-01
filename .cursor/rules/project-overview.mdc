@@ -20,4 +20,4 @@ A generated "loop" is a **lollipop**: out-and-back stem + a loop in the middle +
 
 Lasso means "must visit this area" (any node in the mask). Path tool means "must cover this exact snapped chain" (all nodes). Path tool is shortest-path between clicks, not a buffer around the drawn line.
 
-Be careful: generation currently blocks that connection (no cancel). Switching graphs mid-session can leave stale path sets on the client. The frontend `algorithm` setting is unused; search is always turn-then-distance.
+Generation runs in a worker thread as a background task per connection; `STOP_GENERATION` sets a stop flag the search loop checks every iteration, and the server then sends `GENERATION_COMPLETE` with `stopped: true` (paths already sent are kept). A new `START_GENERATION` stops the previous one first. Switching graphs mid-session can leave stale path sets on the client. The frontend `algorithm` setting is unused; search is always turn-then-distance.

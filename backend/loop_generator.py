@@ -1,7 +1,7 @@
 
 import heapq
 import math
-from typing import List, Tuple, Dict, Any, Generator, Optional, Set
+from typing import Callable, List, Tuple, Dict, Any, Generator, Optional, Set
 import networkx as nx
 import shapely.geometry
 from shapely.ops import linemerge
@@ -546,6 +546,20 @@ ALGORITHMS: Dict[str, Dict[str, Any]] = {
         'node_bucket_cap': 3,  # overridden by cap_k when provided
         'order': 'pleasant',
     },
+    'discomfort_capped': {
+        'label': 'Pleasant, ignore turns (capped)',
+        'prune_self_cross': True,
+        'astar_bound': True,
+        'node_bucket_cap': 3,
+        'order': 'discomfort',
+    },
+    'distance_capped': {
+        'label': 'Distance only (capped)',
+        'prune_self_cross': True,
+        'astar_bound': True,
+        'node_bucket_cap': 3,
+        'order': 'distance',
+    },
 }
 
 BUCKET_M = 0.5 / MILES_PER_METER  # 0.5 miles in meters
@@ -586,23 +600,30 @@ def find_paths_turns_dist(
     debug_snapshots: bool = False,
     snapshot_every: int = 25000,
     order: str = 'turns',
+    road_weights: Optional[Dict[str, float]] = None,
+    rural_scale: bool = True,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> Generator[Dict[str, Any], None, None]:
-    """Yields unique loop paths using turns-then-distance heap search.
+    """Yields unique loop paths.
 
     Options (all off for baseline 'turns'):
       prune_self_cross: drop paths that revisit a node before min_path_length
       astar_bound: skip states where dist + shortest_back_to_start > max
       node_bucket_cap: at most K expansions per (node, distance-bucket)
-      order: 'turns' keeps the (turns, dist) heap. 'pleasant' uses
-        (turns + discomfort, dist) and the short-crossing exemption.
+      order:
+        'turns' — heap (turns, dist, node_id), unchanged
+        'pleasant' — heap (turns + discomfort, dist, node_id)
+        'discomfort' — heap (discomfort, dist, node_id); turns are reported only
+        'distance' — heap (dist, node_id); turns are reported only
     """
-    if order == 'pleasant' and G.number_of_edges():
-        _u, _v, sample = next(iter(G.edges(data=True)))
-        if 'stress' not in sample:
-            annotate_edge_stress(G)
+    stress_order = order in ('pleasant', 'discomfort')
+    if stress_order and G.number_of_edges():
+        annotate_edge_stress(G, turns_per_mile=road_weights, rural=rural_scale)
 
-    if order == 'pleasant':
+    if stress_order:
         queue = [((0.0, 0.0, start_node), PathNode(start_node), 0, 0, 0.0)]
+    elif order == 'distance':
+        queue = [((0.0, start_node), PathNode(start_node), 0, 0)]
     else:
         queue = [((0, 0.0, start_node), PathNode(start_node), 0)]
     path_masks: Set[int] = set()
@@ -639,14 +660,19 @@ def find_paths_turns_dist(
     try:
         while queue:
             iters += 1
+            if should_stop is not None and should_stop():
+                print(f"Stop requested at iter {iters}: yielded={yielded}")
+                break
             if iters > MAX_ITERS:
                 print(f"Max iterations {MAX_ITERS} reached. Stopping.")
                 print(f"  queue={len(queue)}, yielded={yielded}, "
                       f"max_dist_reached={max_dist_reached:.0f}m")
                 break
 
-            if order == 'pleasant':
+            if stress_order:
                 (_priority, dist, _), curr_node, visited_mask, turns, discomfort = heapq.heappop(queue)
+            elif order == 'distance':
+                (dist, _), curr_node, visited_mask, turns = heapq.heappop(queue)
             else:
                 (turns, dist, _), curr_node, visited_mask = heapq.heappop(queue)
 
@@ -706,7 +732,7 @@ def find_paths_turns_dist(
                 elev_profile, climb_ft, _ = compute_elevation_profile(G, path)
                 difficulty = compute_difficulty(total_miles, climb_ft)
                 reported_discomfort = None
-                if order == 'pleasant':
+                if stress_order:
                     _, reported_discomfort = score_pleasant_path(G, path)
                 properties = _create_properties(
                     turns, visited_mask, loop_ratio, loop_dist, total_dist, path,
@@ -746,7 +772,7 @@ def find_paths_turns_dist(
                     continue  # Skip immediate backtracking
 
                 tiebreaker = neighbor
-                if order == 'pleasant':
+                if stress_order:
                     prev = curr_node.prev
                     prev_id = prev.id if prev is not None else None
                     prev_prev_id = (
@@ -756,7 +782,10 @@ def find_paths_turns_dist(
                         G, prev_prev_id, prev_id, curr_node.id, neighbor,
                         turns, dist, discomfort,
                     )
-                    priority = new_turns + new_discomfort
+                    if order == 'pleasant':
+                        priority = new_turns + new_discomfort
+                    else:
+                        priority = new_discomfort
                     new_node = PathNode(neighbor, curr_node, new_dist)
                     heapq.heappush(queue, (
                         (priority, new_dist, tiebreaker),
@@ -764,6 +793,17 @@ def find_paths_turns_dist(
                         new_mask,
                         new_turns,
                         new_discomfort,
+                    ))
+                elif order == 'distance':
+                    new_turns, new_dist = weight_function_turns_dist(
+                        G, curr_node, neighbor, turns, dist
+                    )
+                    new_node = PathNode(neighbor, curr_node, new_dist)
+                    heapq.heappush(queue, (
+                        (new_dist, tiebreaker),
+                        new_node,
+                        new_mask,
+                        new_turns,
                     ))
                 else:
                     new_turns, new_dist = weight_function_turns_dist(
@@ -796,6 +836,9 @@ def find_paths(
     debug_snapshots: bool = False,
     snapshot_every: int = 25000,
     graph_name: str = 'graph',
+    road_weights: Optional[Dict[str, float]] = None,
+    rural_scale: bool = True,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> Generator[Dict[str, Any], None, None]:
     """Dispatcher: look up strategy in ALGORITHMS and run the turns-first core."""
     algo_id = resolve_algorithm(algorithm)
@@ -820,4 +863,7 @@ def find_paths(
         debug_snapshots=debug_snapshots,
         snapshot_every=snapshot_every,
         order=opts.get('order', 'turns'),
+        road_weights=road_weights,
+        rural_scale=rural_scale,
+        should_stop=should_stop,
     )

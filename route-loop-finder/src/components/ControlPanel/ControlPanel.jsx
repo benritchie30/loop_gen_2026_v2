@@ -7,6 +7,11 @@ import DistanceFilter from './DistanceFilter';
 import DifficultyFilter from './DifficultyFilter';
 import GraphSelector from './GraphSelector';
 import ThemeSettings from './ThemeSettings';
+import {
+    DEFAULT_ROAD_WEIGHTS,
+    ROAD_WEIGHT_FIELDS,
+    ROAD_WEIGHT_PRESETS,
+} from '../../utils/roadWeights';
 
 /**
  * Floating control panel for path navigation, filtering, and mode switching.
@@ -86,6 +91,8 @@ function ControlPanel({
             { id: 'turns_pruned', label: 'Turns-first + self-cross prune + A*' },
             { id: 'turns_capped', label: 'Turns-first + capped state space' },
             { id: 'pleasant_capped', label: 'Pleasant roads (capped)' },
+            { id: 'discomfort_capped', label: 'Pleasant, ignore turns (capped)' },
+            { id: 'distance_capped', label: 'Distance only (capped)' },
         ];
 
     return (
@@ -262,7 +269,7 @@ function ControlPanel({
                                     </select>
                                 </label>
 
-                                {(genSettings.algorithm === 'turns_capped' || genSettings.algorithm === 'pleasant_capped') && (
+                                {String(genSettings.algorithm || '').endsWith('_capped') && (
                                     <label className="setting-item full-width">
                                         <span>Cap per node/bucket</span>
                                         <input
@@ -274,6 +281,67 @@ function ControlPanel({
                                         />
                                     </label>
                                 )}
+
+                                <details className="road-weights">
+                                    <summary>Road weights</summary>
+                                    <p className="road-weights__hint">
+                                        A number is extra turns per mile. 0 is free. A bike lane still cuts a costly road.
+                                    </p>
+                                    <div className="road-weights__presets">
+                                        {ROAD_WEIGHT_PRESETS.map(preset => (
+                                            <button
+                                                type="button"
+                                                key={preset.id}
+                                                className={genSettings.road_weight_preset === preset.id ? 'is-active' : ''}
+                                                onClick={() => setGenSettings(prev => ({
+                                                    ...prev,
+                                                    road_weights: { ...preset.weights },
+                                                    road_weight_preset: preset.id,
+                                                    rural_scale: preset.rural_scale,
+                                                }))}
+                                            >
+                                                {preset.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    <div className="settings-grid">
+                                        {ROAD_WEIGHT_FIELDS.map(([key, label]) => (
+                                            <label key={key} className="setting-item">
+                                                <span>{label}</span>
+                                                <input
+                                                    type="number"
+                                                    min="0"
+                                                    step="0.1"
+                                                    value={genSettings.road_weights?.[key] ?? 0}
+                                                    onChange={(e) => {
+                                                        const num = parseFloat(e.target.value);
+                                                        setGenSettings(prev => ({
+                                                            ...prev,
+                                                            road_weight_preset: 'custom',
+                                                            road_weights: {
+                                                                ...DEFAULT_ROAD_WEIGHTS,
+                                                                ...prev.road_weights,
+                                                                [key]: Number.isFinite(num) && num >= 0 ? num : 0,
+                                                            },
+                                                        }));
+                                                    }}
+                                                />
+                                            </label>
+                                        ))}
+                                        <label className="setting-item full-width road-weights__rural">
+                                            <input
+                                                type="checkbox"
+                                                checked={genSettings.rural_scale !== false}
+                                                onChange={(e) => setGenSettings(prev => ({
+                                                    ...prev,
+                                                    road_weight_preset: 'custom',
+                                                    rural_scale: e.target.checked,
+                                                }))}
+                                            />
+                                            <span>Soften busy roads on rural graphs</span>
+                                        </label>
+                                    </div>
+                                </details>
 
                                 <label className="setting-item full-width">
                                     <span>Dedup</span>

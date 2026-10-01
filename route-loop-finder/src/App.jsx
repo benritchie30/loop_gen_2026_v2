@@ -7,6 +7,7 @@ import { ControlPanel } from './components/ControlPanel';
 import ElevationProfileWindow from './components/ElevationProfileWindow';
 import { useWebSocket } from './hooks/useWebSocket';
 import { usePathSets } from './hooks/usePathSets';
+import { normalizeRoadWeights, DEFAULT_ROAD_WEIGHTS } from './utils/roadWeights';
 import { useAppMode } from './hooks/useAppMode';
 
 const LAST_GRAPH_SHAPE_KEY = 'lastGraphShape';
@@ -68,6 +69,7 @@ function App() {
   // Initialize hooks
   const { status: wsStatus, sendMessage, subscribe } = useWebSocket();
   const {
+    pathSets,
     pathSetMarkers,
     activePathSetId,
     activePathSet,
@@ -150,10 +152,28 @@ function App() {
     { id: 'turns_pruned', label: 'Turns-first + self-cross prune + A*' },
     { id: 'turns_capped', label: 'Turns-first + capped state space' },
     { id: 'pleasant_capped', label: 'Pleasant roads (capped)' },
+    { id: 'discomfort_capped', label: 'Pleasant, ignore turns (capped)' },
+    { id: 'distance_capped', label: 'Distance only (capped)' },
   ]);
 
   // Ref for path tool undo handler
   const pathUndoRef = useRef(null);
+
+  const generatingPathSetId = Object.keys(pathSets).find(id => !pathSets[id].isComplete) || null;
+  const isGenerating = generatingPathSetId !== null;
+  const generatingPathCount = isGenerating ? pathSets[generatingPathSetId].paths.length : 0;
+
+  const handleStopGeneration = useCallback(() => {
+    sendMessage('STOP_GENERATION', {});
+  }, [sendMessage]);
+
+  // The server can't send GENERATION_COMPLETE after the socket drops
+  useEffect(() => {
+    if (wsStatus === 'connected') return;
+    Object.keys(pathSets).forEach(id => {
+      if (!pathSets[id].isComplete) completePathSet(id);
+    });
+  }, [wsStatus, pathSets, completePathSet]);
 
   // Queue to track pending requests context (to know if response is include/exclude)
   const pendingRequests = useRef([]);
@@ -355,6 +375,9 @@ function App() {
       cap_k: 3,
       debug_snapshots: false,
       snapshot_every: 25000,
+      road_weights: { ...DEFAULT_ROAD_WEIGHTS },
+      road_weight_preset: 'current',
+      rural_scale: true,
     };
     try {
       const saved = localStorage.getItem('generatorSettings');
@@ -364,7 +387,9 @@ function App() {
       if (legacy[parsed.algorithm]) {
         parsed.algorithm = legacy[parsed.algorithm];
       }
-      return { ...defaults, ...parsed };
+      parsed.road_weights = normalizeRoadWeights(parsed.road_weights);
+      if (typeof parsed.rural_scale !== 'boolean') parsed.rural_scale = true;
+      return { ...defaults, ...parsed, road_weights: parsed.road_weights };
     } catch {
       return defaults;
     }
@@ -465,6 +490,11 @@ function App() {
 
       // Display Mode Shortcuts
       if (mode === 'display') {
+        // Escape: stop the running generator
+        if (e.key === 'Escape' && isGenerating && !activeTool) {
+          handleStopGeneration();
+        }
+
         // Backspace: Return to Input Mode
         if (e.key === 'Backspace') {
           console.log('Backspace pressed, returning to input mode');
@@ -527,7 +557,7 @@ function App() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [mode, pendingMarker, sendMessage, clearPendingMarker, selectPathSet, setMode, undoLastSelection, genSettings, graphBounds, isCreatingGraph, nextPath, prevPath, activeTool, setActiveTool, setIsExcludeMode, setIsElevationMinimized, pathUndoRef, graphCreateMode, handleCreateGraph, exclusionZones, setIsDrawingExclusion]);
+  }, [mode, pendingMarker, sendMessage, clearPendingMarker, selectPathSet, setMode, undoLastSelection, genSettings, graphBounds, isCreatingGraph, nextPath, prevPath, activeTool, setActiveTool, setIsExcludeMode, setIsElevationMinimized, pathUndoRef, graphCreateMode, handleCreateGraph, exclusionZones, setIsDrawingExclusion, isGenerating, handleStopGeneration]);
 
   // Auto-show elevation window when path with elevation data is selected
   // Auto-show elevation window when path with elevation data is selected
@@ -593,6 +623,9 @@ function App() {
         showGraphBoundary={showGraphBoundary}
         showGraphNodes={showGraphNodes}
         graphNodes={graphNodes}
+        isGenerating={isGenerating}
+        generatingPathCount={generatingPathCount}
+        onStopGeneration={handleStopGeneration}
 
         // Exclusion / Drawing props
         exclusionZones={exclusionZones}

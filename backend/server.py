@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import websockets
 import json
 import uuid
@@ -21,6 +22,15 @@ async def handler(websocket):
     # Send available graphs and algorithms on connect
     await send_graphs_list(websocket)
     await send_algorithms_list(websocket)
+
+    gen_state = {"task": None, "stop": None}
+
+    async def stop_current_generation():
+        task, stop_event = gen_state["task"], gen_state["stop"]
+        if stop_event is not None:
+            stop_event.set()
+        if task is not None and not task.done():
+            await task
     
     try:
         async for message in websocket:
@@ -30,7 +40,15 @@ async def handler(websocket):
                 print(f"Received: {msg_type} {data}")
 
                 if msg_type == "START_GENERATION":
-                    await handle_start_generation(websocket, data)
+                    await stop_current_generation()
+                    stop_event = threading.Event()
+                    gen_state["stop"] = stop_event
+                    gen_state["task"] = asyncio.create_task(
+                        handle_start_generation(websocket, data, stop_event)
+                    )
+                elif msg_type == "STOP_GENERATION":
+                    if gen_state["stop"] is not None:
+                        gen_state["stop"].set()
                 elif msg_type == "GET_NODES_IN_REGION":
                     await handle_get_nodes_in_region(websocket, data)
                 elif msg_type == "GET_NODES_NEAR_POLYLINE":
@@ -55,6 +73,9 @@ async def handler(websocket):
 
     except websockets.exceptions.ConnectionClosed:
         print("Client disconnected")
+    finally:
+        if gen_state["stop"] is not None:
+            gen_state["stop"].set()
 
 async def send_graphs_list(websocket):
     """Send the list of available graphs to the client."""
@@ -182,7 +203,34 @@ async def handle_create_graph(websocket, data):
             "error": str(e)
         }))
 
-async def handle_start_generation(websocket, data):
+def _parse_road_weights(raw):
+    """Class → turns-per-mile. None means the built-in table. Negatives clamp to 0."""
+    if not isinstance(raw, dict) or not raw:
+        return None
+    cleaned = {}
+    for key, value in raw.items():
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            continue
+        if num < 0:
+            num = 0.0
+        cleaned[str(key)] = num
+    return cleaned or None
+
+
+async def handle_start_generation(websocket, data, stop_event):
+    try:
+        await _run_generation(websocket, data, stop_event)
+    except websockets.exceptions.ConnectionClosed:
+        print("Client disconnected during generation")
+    except Exception as e:
+        print(f"Error during generation: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+async def _run_generation(websocket, data, stop_event):
     lat = data.get("lat")
     lng = data.get("lng")
     
@@ -220,13 +268,20 @@ async def handle_start_generation(websocket, data):
     debug_snapshots = bool(data.get("debug_snapshots", False))
     snapshot_every = int(data.get("snapshot_every") or 25000)
     graph_name = gm.get_active_name() or "graph"
+    road_weights = _parse_road_weights(data.get("road_weights"))
+    rural_scale = data.get("rural_scale", True)
+    if isinstance(rural_scale, str):
+        rural_scale = rural_scale.strip().lower() not in ("false", "0", "no")
+    else:
+        rural_scale = bool(rural_scale)
     
-    print(f"Starting generation: {max_paths} paths, Alg: {algorithm}, Dedup: {deduplication}, MinDist: {min_dist_m}m, Range: {min_path_len/1609.34:.1f}-{max_path_len/1609.34:.1f}mi")
+    print(f"Starting generation: {max_paths} paths, Alg: {algorithm}, Dedup: {deduplication}, MinDist: {min_dist_m}m, Range: {min_path_len/1609.34:.1f}-{max_path_len/1609.34:.1f}mi, rural_scale={rural_scale}")
 
-    # Run generator
+    # Run generator in a worker thread so this connection can still receive STOP_GENERATION
     count = 0
+    loop = asyncio.get_running_loop()
 
-    for path_geojson in find_paths(
+    gen = find_paths(
         G, 
         start_node, 
         min_path_len, 
@@ -241,23 +296,34 @@ async def handle_start_generation(websocket, data):
         debug_snapshots=debug_snapshots,
         snapshot_every=snapshot_every,
         graph_name=graph_name,
-    ):
-        response = {
-            "type": "PATH_RECEIVED",
-            "pathSetId": path_set_id,
-            "path": path_geojson
-        }
-        await websocket.send(json.dumps(response))
-        await asyncio.sleep(0) # Yield control
-        
-        count += 1
-        if count >= max_paths:
-            break
+        road_weights=road_weights,
+        rural_scale=rural_scale,
+        should_stop=stop_event.is_set,
+    )
+
+    try:
+        while count < max_paths and not stop_event.is_set():
+            path_geojson = await loop.run_in_executor(None, next, gen, None)
+            if path_geojson is None:
+                break
+            await websocket.send(json.dumps({
+                "type": "PATH_RECEIVED",
+                "pathSetId": path_set_id,
+                "path": path_geojson
+            }))
+            count += 1
+    finally:
+        gen.close()
+
+    stopped = stop_event.is_set()
+    if stopped:
+        print(f"Generation stopped by client after {count} paths")
 
     # 5. Complete
     await websocket.send(json.dumps({
         "type": "GENERATION_COMPLETE",
-        "pathSetId": path_set_id
+        "pathSetId": path_set_id,
+        "stopped": stopped,
     }))
 
 async def handle_get_nodes_in_region(websocket, data):

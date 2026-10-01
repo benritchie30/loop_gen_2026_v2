@@ -58,9 +58,48 @@ def _tag_values(value):
     return [text]
 
 
-def _turns_per_mile(highway_tag):
-    if highway_tag in _TURNS_PER_MILE:
-        return _TURNS_PER_MILE[highway_tag]
+# Request weights name these classes. Links and a few aliases follow a parent
+# so the panel does not list every OSM variant.
+_LINK_PARENT = {
+    'tertiary_link': 'tertiary',
+    'secondary_link': 'secondary',
+    'primary_link': 'primary',
+    'trunk_link': 'trunk',
+    'road': 'secondary',
+    'bridleway': 'path',
+}
+
+
+def resolve_turns_per_mile(overrides):
+    """Built-in table, or that table with request overrides applied.
+
+    None keeps link premiums (secondary_link 1.5, primary_link 5). A dict
+    replaces named classes and then sets each link to its parent's weight.
+    Values below 0 are clamped to 0. Unknown keys are ignored.
+    """
+    if not overrides:
+        return None
+    table = dict(_TURNS_PER_MILE)
+    for key, value in overrides.items():
+        if not isinstance(key, str):
+            continue
+        name = key.strip().lower()
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            continue
+        if num < 0:
+            num = 0.0
+        table[name] = num
+    for link, parent in _LINK_PARENT.items():
+        if parent in table:
+            table[link] = table[parent]
+    return table
+
+
+def _turns_per_mile(highway_tag, table):
+    if highway_tag in table:
+        return table[highway_tag]
     return 1.0
 
 
@@ -96,13 +135,17 @@ def _maxspeed_kmh(value):
     return best
 
 
-def edge_stress(data):
-    """Turn-equivalents per meter for one edge, before the rural scale."""
+def edge_stress(data, turns_per_mile=None):
+    """Turn-equivalents per meter for one edge, before the rural scale.
+
+    turns_per_mile is a resolved class map. None uses the built-in table.
+    """
+    table = turns_per_mile if turns_per_mile is not None else _TURNS_PER_MILE
     highways = _tag_values(data.get('highway'))
     if not highways:
         base = 0.0
     else:
-        base = max(_turns_per_mile(h) for h in highways) / MILE_M
+        base = max(_turns_per_mile(h, table) for h in highways) / MILE_M
 
     if base > 0:
         base *= _cycleway_factor(data)
@@ -127,14 +170,19 @@ def edge_stress(data):
     return 0.0
 
 
-def annotate_edge_stress(G):
-    """Write `stress` on every edge. Scales busy roads down on rural graphs.
+def annotate_edge_stress(G, turns_per_mile=None, rural=True):
+    """Write `stress` on every edge. Optionally scale busy roads on rural graphs.
 
-    Rural: if free edges (stress 0) are under 35% of length, multiply every
-    positive stress by 0.4. Idempotent: each call recomputes from tags.
+    turns_per_mile: request overrides (class → turns per mile), or None for
+    the built-in table. rural: if free edges are under 35% of length, multiply
+    every positive stress by 0.4. Each call recomputes from tags.
     """
+    table = resolve_turns_per_mile(turns_per_mile)
     for _u, _v, _k, data in G.edges(keys=True, data=True):
-        data['stress'] = edge_stress(data)
+        data['stress'] = edge_stress(data, table)
+
+    if not rural:
+        return G
 
     total = 0.0
     free = 0.0

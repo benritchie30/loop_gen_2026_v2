@@ -46,6 +46,9 @@ function MapView({
     showGraphBoundary,
     showGraphNodes,
     graphNodes,
+    isGenerating,
+    generatingPathCount,
+    onStopGeneration,
     // Exclusion props
     exclusionZones
 }) {
@@ -149,6 +152,20 @@ function MapView({
                 {getModeLabel()}
                 {isExcludeMode && <span style={{ color: '#ff4444', marginLeft: '8px' }}>(EXCLUDE)</span>}
             </div>
+
+            {isGenerating && (
+                <div className="map-view__generating">
+                    <div className="map-view__status-dot map-view__status-dot--connecting" />
+                    <span>Generating... {generatingPathCount} {generatingPathCount === 1 ? 'route' : 'routes'}</span>
+                    <button
+                        className="map-view__stop-btn"
+                        onClick={onStopGeneration}
+                        title="Stop generating (Esc)"
+                    >
+                        Stop
+                    </button>
+                </div>
+            )}
 
             {/* Tile Switcher */}
             <MapTileSwitcher

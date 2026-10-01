@@ -259,6 +259,56 @@
     grid-column: span 2;
 }
 
+.road-weights {
+    grid-column: span 2;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 6px 8px;
+}
+
+.road-weights summary {
+    cursor: pointer;
+    font-size: var(--font-size-sm);
+    color: var(--color-text);
+}
+
+.road-weights__hint {
+    margin: 8px 0;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+}
+
+.road-weights__presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+
+.road-weights__presets button {
+    padding: 4px 8px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-size: var(--font-size-xs);
+    cursor: pointer;
+}
+
+.road-weights__presets button.is-active {
+    border-color: var(--color-primary);
+}
+
+.road-weights__rural {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+}
+
+.road-weights__rural input {
+    width: auto;
+}
+
 /* Graph Selector */
 .graph-selector {
     display: flex;

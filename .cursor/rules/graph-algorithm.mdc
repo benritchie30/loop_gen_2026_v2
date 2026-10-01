@@ -14,6 +14,10 @@ alwaysApply: false
 - `turns_pruned` — same ordering + self-cross prune + A* bound (`dist + shortest_back_to_start > max` skipped).
 - `turns_capped` — pruned + at most `cap_k` expansions per `(node, 0.5 mi distance bucket)`.
 - `pleasant_capped` — same prune, A* bound, and cap as `turns_capped`, but the heap key is `(turns + discomfort, distance, node_id)`.
+- `discomfort_capped` — same limits, heap key `(discomfort, distance, node_id)`. Turns are counted for display only.
+- `distance_capped` — same limits, heap key `(distance, node_id)`. No stress and no turns in the order. Turns are still reported.
+
+Class weights (turns per mile) can be overridden per search via `road_weights` and `rural_scale` on `START_GENERATION`. Pleasant and discomfort orders always recompute `stress` from those weights. Link classes follow their parent (`road` follows secondary, `bridleway` follows path). Turns-first orders ignore the weights. The `turns` heap item stays `(turns, distance, node_id)`.
 
 Legacy request names (`scenic`, `direct`, `turn`) map to `turns`. Do not invent new strategies without adding them to the registry and UI.
 
@@ -41,7 +45,7 @@ Download filter: `trunk`, `trunk_link`, `primary`, `primary_link`, `secondary`, 
 
 ## Crossing exemption
 
-Only in `pleasant_capped`. When the edge just traversed is ≤ 160 m, strictly busier than the edge before it and the edge after it, and both junctions are ≥30° turns, the exit turn is not added (the pair costs one turn) and that edge's discomfort is refunded down to 0.15. A residential grid corner still counts. No exemption on the first edge.
+Only in `pleasant_capped` and `discomfort_capped`. When the edge just traversed is ≤ 160 m, strictly busier than the edge before it and the edge after it, and both junctions are ≥30° turns, the exit turn is not added (the pair costs one turn) and that edge's discomfort is refunded down to 0.15. A residential grid corner still counts. No exemption on the first edge.
 
 ## Simplification
 
