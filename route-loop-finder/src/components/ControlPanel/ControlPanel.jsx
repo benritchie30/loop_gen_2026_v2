@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, MapPin, MousePointer2, Pencil, Undo2, Ban, ArrowUpDown, Minimize2, Maximize2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronDown, MapPin, MousePointer2, Pencil, Undo2, Ban, ArrowUpDown, Minimize2, Maximize2 } from 'lucide-react';
 import './ControlPanel.css';
 
 import PathInfo from './PathInfo';
@@ -68,11 +68,49 @@ function ControlPanel({
     primaryColor,
     setPrimaryColor,
     showGraphNodes,
-    setShowGraphNodes
+    setShowGraphNodes,
+    hasPoiPins,
+    poiPinCount,
+    keptPinCount,
+    hasProbePin,
+    poiMatch,
+    setPoiMatch,
+    poiRadiusOn,
+    setPoiRadiusOn,
+    poiRadiusMiles,
+    setPoiRadiusMiles,
+    poiNote,
+    onClearProbe,
+    onClearKept,
+    onKeepProbe,
 }) {
     const canGoPrev = currentPathIndex > 0;
     const canGoNext = currentPathIndex < filteredPathsCount - 1;
     const [isMinimized, setIsMinimized] = useState(false);
+    const [collapsed, setCollapsed] = useState(() => {
+        const defaults = {
+            generation: false,
+            debug: true,
+            view: true,
+            distance: true,
+            difficulty: true,
+            appearance: true,
+        };
+        try {
+            const saved = JSON.parse(localStorage.getItem('panelSections') || '{}');
+            return { ...defaults, ...saved };
+        } catch {
+            return defaults;
+        }
+    });
+
+    const toggleSection = (key) => {
+        setCollapsed((prev) => {
+            const next = { ...prev, [key]: !prev[key] };
+            localStorage.setItem('panelSections', JSON.stringify(next));
+            return next;
+        });
+    };
 
     const handleSettingChange = (e) => {
         const { name, value, type, checked } = e.target;
@@ -213,7 +251,12 @@ function ControlPanel({
                     {/* Generator Settings - Show in INPUT mode */}
                     {mode === 'input' && genSettings && (
                         <div className="control-panel__section">
-                            <div className="control-panel__section-title">Generation Settings</div>
+                            <SectionToggle
+                                title="Generation Settings"
+                                collapsed={collapsed.generation}
+                                onToggle={() => toggleSection('generation')}
+                            />
+                            {!collapsed.generation && (
                             <div className="settings-grid">
                                 <label className="setting-item">
                                     <span>Min Path Distance</span>
@@ -380,7 +423,13 @@ function ControlPanel({
                                     </label>
                                 )}
 
-                                <div className="control-panel__section-title" style={{ marginTop: '8px' }}>Debug</div>
+                                <SectionToggle
+                                    title="Debug"
+                                    collapsed={collapsed.debug}
+                                    onToggle={() => toggleSection('debug')}
+                                />
+                                {!collapsed.debug && (
+                                <>
                                 <label className="checkbox-item" style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px' }}>
                                     <input
                                         type="checkbox"
@@ -402,7 +451,10 @@ function ControlPanel({
                                         />
                                     </label>
                                 )}
+                                </>
+                                )}
                             </div>
+                            )}
                         </div>
                     )}
 
@@ -426,6 +478,13 @@ function ControlPanel({
                                     <MousePointer2 size={18} />
                                 </button>
                                 <button
+                                    className={`control-panel__tool-btn ${activeTool === 'poi' ? 'active' : ''}`}
+                                    onClick={() => setActiveTool(activeTool === 'poi' ? null : 'poi')}
+                                    title="Near a point (o). Click to probe, Ctrl+click to keep."
+                                >
+                                    <MapPin size={18} />
+                                </button>
+                                <button
                                     className={`control-panel__tool-btn ${isExcludeMode ? 'active exclude' : ''}`}
                                     onClick={() => setIsExcludeMode(!isExcludeMode)}
                                     title="Toggle Exclude Mode (d)"
@@ -440,6 +499,70 @@ function ControlPanel({
                                     <Undo2 size={18} />
                                 </button>
                             </div>
+                            {(activeTool === 'poi' || hasPoiPins) && (
+                                <div className="poi-controls">
+                                    <p className="poi-controls__hint">
+                                        Click the map to probe. Ctrl+click keeps that pin. Double-click or × removes a kept pin. Esc clears the probe.
+                                    </p>
+                                    {poiPinCount > 1 && (
+                                        <div className="poi-controls__match">
+                                            <button
+                                                type="button"
+                                                className={poiMatch === 'all' ? 'active' : ''}
+                                                onClick={() => setPoiMatch('all')}
+                                            >
+                                                All pins
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className={poiMatch === 'any' ? 'active' : ''}
+                                                onClick={() => setPoiMatch('any')}
+                                            >
+                                                Any pin
+                                            </button>
+                                        </div>
+                                    )}
+                                    <label className="poi-controls__radius">
+                                        <input
+                                            type="checkbox"
+                                            checked={poiRadiusOn}
+                                            onChange={(e) => setPoiRadiusOn(e.target.checked)}
+                                        />
+                                        <span>Within {poiRadiusMiles.toFixed(1)} mi</span>
+                                    </label>
+                                    {poiRadiusOn && (
+                                        <input
+                                            type="range"
+                                            min="0.1"
+                                            max="3"
+                                            step="0.1"
+                                            value={poiRadiusMiles}
+                                            onChange={(e) => setPoiRadiusMiles(parseFloat(e.target.value))}
+                                            aria-label="Maximum distance from pins"
+                                        />
+                                    )}
+                                    <div className="poi-controls__actions">
+                                        {hasProbePin && (
+                                            <button type="button" onClick={onKeepProbe}>Keep probe</button>
+                                        )}
+                                        {hasProbePin && (
+                                            <button type="button" onClick={onClearProbe}>Clear probe</button>
+                                        )}
+                                        {keptPinCount > 0 && (
+                                            <button type="button" onClick={onClearKept}>Clear pins</button>
+                                        )}
+                                    </div>
+                                    {poiNote && (
+                                        <p className="poi-controls__note">
+                                            {poiNote.fallback
+                                                ? `None within ${poiNote.radius.toFixed(1)} mi. Showing the ${poiNote.shown} closest. Nearest is ${formatNoteMiles(poiNote.closest)}.`
+                                                : poiNote.radius
+                                                    ? `${poiNote.withinCount} ${poiNote.withinCount === 1 ? 'route comes' : 'routes come'} within ${poiNote.radius.toFixed(1)} mi.`
+                                                    : `Nearest approach is ${formatNoteMiles(poiNote.closest)}.`}
+                                        </p>
+                                    )}
+                                </div>
+                            )}
                         </div>
                     )}
 
@@ -447,8 +570,13 @@ function ControlPanel({
                     {hasActivePathSet && (
                         <>
                             <div className="control-panel__section">
-                                <div className="control-panel__section-title">View Options</div>
-                                <div className="settings-grid">
+                            <SectionToggle
+                                title="View Options"
+                                collapsed={collapsed.view}
+                                onToggle={() => toggleSection('view')}
+                            />
+                            {!collapsed.view && (
+                            <div className="settings-grid">
                                     {showPathPreview && (
                                         <label className="setting-item full-width" style={{ marginTop: '8px' }}>
                                             <span style={{ fontSize: '12px', color: 'var(--color-text-muted)' }}>Preview Opacity: {Math.round(pathPreviewOpacity * 100)}%</span>
@@ -522,6 +650,7 @@ function ControlPanel({
                                     </label>
 
                                 </div>
+                            )}
                             </div>
 
                             <div className="control-panel__section">
@@ -540,6 +669,9 @@ function ControlPanel({
                                         <option value="turns">Number of Turns</option>
                                         <option value="discomfort">Discomfort</option>
                                         <option value="spatial">Spatial Flow</option>
+                                        {hasPoiPins && (
+                                            <option value="poi">Closest to pins</option>
+                                        )}
                                     </select>
                                     <button
                                         className="control-panel__tool-btn"
@@ -553,19 +685,31 @@ function ControlPanel({
                             </div>
 
                             <div className="control-panel__section">
-                                <div className="control-panel__section-title">Filter by Distance</div>
+                            <SectionToggle
+                                title="Filter by Distance"
+                                collapsed={collapsed.distance}
+                                onToggle={() => toggleSection('distance')}
+                            />
+                            {!collapsed.distance && (
                                 <DistanceFilter
                                     distanceRange={distanceRange}
                                     setDistanceRange={setDistanceRange}
                                 />
+                            )}
                             </div>
 
                             <div className="control-panel__section">
-                                <div className="control-panel__section-title">Filter by Difficulty</div>
+                            <SectionToggle
+                                title="Filter by Difficulty"
+                                collapsed={collapsed.difficulty}
+                                onToggle={() => toggleSection('difficulty')}
+                            />
+                            {!collapsed.difficulty && (
                                 <DifficultyFilter
                                     difficultyRange={difficultyRange}
                                     setDifficultyRange={setDifficultyRange}
                                 />
+                            )}
                             </div>
                         </>
                     )}
@@ -588,6 +732,8 @@ function ControlPanel({
                     <ThemeSettings
                         primaryColor={primaryColor}
                         setPrimaryColor={setPrimaryColor}
+                        collapsed={collapsed.appearance}
+                        onToggle={() => toggleSection('appearance')}
                     />
                 </div>
             )}
@@ -595,4 +741,24 @@ function ControlPanel({
     );
 }
 
+function SectionToggle({ title, collapsed, onToggle }) {
+    return (
+        <button
+            type="button"
+            className="control-panel__section-toggle"
+            onClick={onToggle}
+            aria-expanded={!collapsed}
+        >
+            <span>{title}</span>
+            <ChevronDown size={14} className={collapsed ? '' : 'is-open'} />
+        </button>
+    );
+}
+
 export default ControlPanel;
+
+function formatNoteMiles(miles) {
+    if (typeof miles !== 'number' || !Number.isFinite(miles)) return '—';
+    if (miles < 0.1) return `${Math.round(miles * 5280)} ft`;
+    return `${miles.toFixed(2)} mi`;
+}

@@ -4,6 +4,9 @@
     right: var(--space-lg);
     z-index: 1000;
     width: 320px;
+    max-height: calc(100vh - 2 * var(--space-lg));
+    display: flex;
+    flex-direction: column;
     background: var(--color-bg);
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-lg);
@@ -72,6 +75,8 @@
 
 .control-panel__body {
     padding: var(--space-md);
+    overflow-y: auto;
+    min-height: 0;
 }
 
 .control-panel__section {
@@ -89,6 +94,35 @@
     letter-spacing: 0.5px;
     color: var(--color-text-muted);
     margin-bottom: var(--space-sm);
+}
+
+.control-panel__section-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    margin-bottom: 0;
+    padding: 0;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--color-text-muted);
+}
+
+.control-panel__section-toggle svg {
+    transition: transform 0.15s ease;
+}
+
+.control-panel__section-toggle svg.is-open {
+    transform: rotate(180deg);
+}
+
+.control-panel__section-toggle + * {
+    margin-top: var(--space-sm);
 }
 
 /* Mode controls */
@@ -211,6 +245,61 @@
     /* Red for exclude */
 }
 
+.poi-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.poi-controls__hint,
+.poi-controls__note {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.35;
+    color: var(--color-text-muted);
+}
+
+.poi-controls__match {
+    display: flex;
+    gap: 4px;
+}
+
+.poi-controls__match button,
+.poi-controls__actions button {
+    flex: 1;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-text);
+    border-radius: var(--radius-sm);
+    padding: 4px 8px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.poi-controls__match button.active {
+    background: var(--color-primary);
+    color: white;
+    border-color: var(--color-primary);
+}
+
+.poi-controls__radius {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.poi-controls__actions {
+    display: flex;
+    gap: 4px;
+}
+
+.poi-controls input[type="range"] {
+    width: 100%;
+}
+
 /* Empty state */
 .control-panel__empty {
     padding: var(--space-lg);
@@ -228,10 +317,8 @@
 }
 
 /* Settings Grid */
-.settings-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: var(--space-sm);
+.settings-grid > .control-panel__section-toggle {
+    grid-column: 1 / -1;
 }
 
 .setting-item {

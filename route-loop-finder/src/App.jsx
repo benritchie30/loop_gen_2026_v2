@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useState, useRef } from 'react';
+import { useEffect, useCallback, useState, useRef, useMemo } from 'react';
 import { Activity } from 'lucide-react';
 import './App.css';
 
@@ -68,6 +68,32 @@ function boundaryToGraphBounds(boundary) {
 function App() {
   // Initialize hooks
   const { status: wsStatus, sendMessage, subscribe } = useWebSocket();
+
+  const pinSeq = useRef(1);
+  const [probePin, setProbePin] = useState(null);
+  const [keptPins, setKeptPins] = useState([]);
+  const [poiMatch, setPoiMatch] = useState('all');
+  const [poiRadiusOn, setPoiRadiusOn] = useState(false);
+  const [poiRadiusMiles, setPoiRadiusMiles] = useState(0.5);
+
+  const poiPins = useMemo(() => {
+    const pins = keptPins.map((pin, index) => ({
+      ...pin,
+      kind: 'kept',
+      label: String(index + 1),
+    }));
+    if (probePin) {
+      pins.push({
+        id: 'probe',
+        kind: 'probe',
+        label: '•',
+        lat: probePin.lat,
+        lng: probePin.lng,
+      });
+    }
+    return pins;
+  }, [keptPins, probePin]);
+
   const {
     pathSets,
     pathSetMarkers,
@@ -76,6 +102,7 @@ function App() {
     currentPath,
     currentPathIndex,
     filteredPaths,
+    poiNote,
     distanceRange,
     difficultyRange,
     sortBy,
@@ -98,7 +125,11 @@ function App() {
     goToLast,
     reverseCurrentPathProfile,
     undoLastSelection
-  } = usePathSets();
+  } = usePathSets({
+    poiPins,
+    poiMatch,
+    poiRadiusMiles: poiRadiusOn ? poiRadiusMiles : null,
+  });
 
   const {
     mode,
@@ -109,10 +140,50 @@ function App() {
   } = useAppMode();
 
   // Local state for tools
-  const [activeTool, setActiveTool] = useState(null); // 'path', 'lasso', or null
+  const [activeTool, setActiveTool] = useState(null); // 'path', 'lasso', 'poi', or null
   const [isExcludeMode, setIsExcludeMode] = useState(false);
   const [isElevationMinimized, setIsElevationMinimized] = useState(false);
   const [hoveredPoint, setHoveredPoint] = useState(null);
+
+  const prevSortRef = useRef(sortBy === 'poi' ? 'total_miles' : sortBy);
+  if (sortBy !== 'poi') prevSortRef.current = sortBy;
+  const hadPinsRef = useRef(false);
+  const sortByRef = useRef(sortBy);
+  sortByRef.current = sortBy;
+
+  useEffect(() => {
+    const hasPins = poiPins.length > 0;
+    if (!hasPins && hadPinsRef.current && sortByRef.current === 'poi') {
+      setSortBy(prevSortRef.current || 'total_miles');
+    }
+    hadPinsRef.current = hasPins;
+  }, [poiPins.length, setSortBy]);
+
+  const handlePoiProbe = useCallback((point) => {
+    setProbePin(point);
+  }, []);
+
+  const handlePoiKeep = useCallback((point) => {
+    const source = probePin || point;
+    const id = pinSeq.current++;
+    setKeptPins((prev) => [...prev, { id, lat: source.lat, lng: source.lng }]);
+    if (probePin) setProbePin(null);
+  }, [probePin]);
+
+  const handleKeepProbe = useCallback(() => {
+    if (!probePin) return;
+    const id = pinSeq.current++;
+    setKeptPins((prev) => [...prev, { id, lat: probePin.lat, lng: probePin.lng }]);
+    setProbePin(null);
+  }, [probePin]);
+
+  const handleRemoveKept = useCallback((id) => {
+    setKeptPins((prev) => prev.filter((pin) => pin.id !== id));
+  }, []);
+
+  const handleClearKept = useCallback(() => {
+    setKeptPins([]);
+  }, []);
 
   // Display Options
   const [showArrows, setShowArrows] = useState(true);
@@ -490,8 +561,10 @@ function App() {
 
       // Display Mode Shortcuts
       if (mode === 'display') {
-        // Escape: stop the running generator
-        if (e.key === 'Escape' && isGenerating && !activeTool) {
+        // Escape: clear the probe pin, otherwise stop the running generator
+        if (e.key === 'Escape' && probePin) {
+          setProbePin(null);
+        } else if (e.key === 'Escape' && isGenerating && !activeTool) {
           handleStopGeneration();
         }
 
@@ -528,6 +601,11 @@ function App() {
           setActiveTool(activeTool === 'lasso' ? null : 'lasso');
         }
 
+        // o: near-a-point tool
+        if ((e.key === 'o' || e.key === 'O') && !e.ctrlKey && !e.metaKey) {
+          setActiveTool(activeTool === 'poi' ? null : 'poi');
+        }
+
         // k: pan / no tool
         if (e.key === 'k' || e.key === 'K') {
           setActiveTool(null);
@@ -557,7 +635,7 @@ function App() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [mode, pendingMarker, sendMessage, clearPendingMarker, selectPathSet, setMode, undoLastSelection, genSettings, graphBounds, isCreatingGraph, nextPath, prevPath, activeTool, setActiveTool, setIsExcludeMode, setIsElevationMinimized, pathUndoRef, graphCreateMode, handleCreateGraph, exclusionZones, setIsDrawingExclusion, isGenerating, handleStopGeneration]);
+  }, [mode, pendingMarker, sendMessage, clearPendingMarker, selectPathSet, setMode, undoLastSelection, genSettings, graphBounds, isCreatingGraph, nextPath, prevPath, activeTool, setActiveTool, setIsExcludeMode, setIsElevationMinimized, pathUndoRef, graphCreateMode, handleCreateGraph, exclusionZones, setIsDrawingExclusion, isGenerating, handleStopGeneration, probePin]);
 
   // Auto-show elevation window when path with elevation data is selected
   // Auto-show elevation window when path with elevation data is selected
@@ -631,6 +709,11 @@ function App() {
         exclusionZones={exclusionZones}
         // Merge exclude mode logic: True if user toggled exclude mode OR if drawing an exclusion zone
         isExcludeMode={isExcludeMode || isDrawingExclusion}
+        poiPins={poiPins}
+        poiRadiusMiles={poiRadiusOn ? poiRadiusMiles : null}
+        onPoiProbe={handlePoiProbe}
+        onPoiKeep={handlePoiKeep}
+        onPoiRemoveKept={handleRemoveKept}
       />
 
       <ControlPanel
@@ -654,6 +737,7 @@ function App() {
         onGoToFirst={goToFirst}
         onGoToLast={goToLast}
         hasActivePathSet={!!activePathSetId}
+        activeTool={activeTool}
         setActiveTool={setActiveTool}
         isExcludeMode={isExcludeMode}
         setIsExcludeMode={setIsExcludeMode}
@@ -692,6 +776,20 @@ function App() {
 
         primaryColor={primaryColor}
         setPrimaryColor={setPrimaryColor}
+        hasPoiPins={poiPins.length > 0}
+        poiPinCount={poiPins.length}
+        keptPinCount={keptPins.length}
+        hasProbePin={!!probePin}
+        poiMatch={poiMatch}
+        setPoiMatch={setPoiMatch}
+        poiRadiusOn={poiRadiusOn}
+        setPoiRadiusOn={setPoiRadiusOn}
+        poiRadiusMiles={poiRadiusMiles}
+        setPoiRadiusMiles={setPoiRadiusMiles}
+        poiNote={poiNote}
+        onClearProbe={() => setProbePin(null)}
+        onClearKept={handleClearKept}
+        onKeepProbe={handleKeepProbe}
       />
 
       {/* Elevation Window & Toggle */}

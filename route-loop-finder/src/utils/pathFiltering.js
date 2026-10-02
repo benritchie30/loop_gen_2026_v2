@@ -98,6 +98,14 @@ function getCentroidDistSq(p1, p2) {
  * 'spatial' uses nearest-neighbor sort based on centroid distance.
  */
 export function sortPaths(paths, sortBy = 'loop_miles', ascending = true) {
+    if (sortBy === 'poi') {
+        return [...paths].sort((a, b) => {
+            const aVal = a.properties?.poi_miles ?? Infinity;
+            const bVal = b.properties?.poi_miles ?? Infinity;
+            return ascending ? aVal - bVal : bVal - aVal;
+        });
+    }
+
     // Standard property sort
     if (sortBy !== 'spatial') {
         return [...paths].sort((a, b) => {

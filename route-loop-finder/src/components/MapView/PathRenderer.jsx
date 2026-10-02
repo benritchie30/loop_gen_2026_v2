@@ -28,6 +28,16 @@ function PathRenderer({
     pathPreviewOpacity = 0.4
 }) {
     // Style for inactive/background paths — very subtle, matching the theme but desaturated/lighter
+    const nearestPoiMiles = useMemo(() => {
+        if (!filteredPaths?.length) return null;
+        let nearest = Infinity;
+        for (const path of filteredPaths) {
+            const miles = path.properties?.poi_miles;
+            if (typeof miles === 'number' && miles < nearest) nearest = miles;
+        }
+        return Number.isFinite(nearest) ? nearest : null;
+    }, [filteredPaths]);
+
     const inactiveStyle = useMemo(() => ({
         weight: 2,
         color: `hsl(${primaryColor}, 40%, 65%)`, // Muted version of theme color
@@ -66,7 +76,21 @@ function PathRenderer({
     // Generate unique keys for GeoJSON components
     const getPathKey = (path, index, prefix) => {
         const visited = path?.properties?.visited || index;
-        return `${prefix}-${visited}-${index}`;
+        const poi = path?.properties?.poi_miles;
+        const poiKey = typeof poi === 'number' && Number.isFinite(poi) ? poi.toFixed(2) : '';
+        return `${prefix}-${visited}-${index}-${poiKey}`;
+    };
+
+    const previewStyleFor = (path) => {
+        if (nearestPoiMiles == null || typeof path.properties?.poi_miles !== 'number') {
+            return inactiveStyle;
+        }
+        const t = Math.min(1, Math.max(0, (path.properties.poi_miles - nearestPoiMiles) / 1));
+        return {
+            weight: 2,
+            color: `hsl(${primaryColor}, ${Math.round(40 - 18 * t)}%, ${Math.round(65 + 12 * t)}%)`,
+            opacity: pathPreviewOpacity * (1 - 0.8 * t),
+        };
     };
 
     // Get style for a selection based on its type
@@ -126,13 +150,14 @@ function PathRenderer({
         <>
             {/* All filtered paths — translucent preview, bottom layer */}
             {showPathPreview && filteredPaths?.map((path, index) => {
+                if (path.id && currentPath?.id && path.id === currentPath.id) return null;
                 if (path === currentPath) return null;
 
                 return (
                     <GeoJSON
                         key={getPathKey(path, index, 'inactive')}
                         data={path}
-                        style={inactiveStyle}
+                        style={previewStyleFor(path)}
                         pane={backgroundPane}
                     />
                 );

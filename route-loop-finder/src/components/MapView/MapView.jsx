@@ -9,6 +9,8 @@ import PathMarker from './PathMarker';
 import PathRenderer from './PathRenderer';
 import BoundsSelector from './BoundsSelector';
 import MapTileSwitcher, { MAP_STYLES } from './MapTileSwitcher';
+import PoiLayer from './PoiLayer';
+import FitMapToGraphBoundary from './FitMapToGraphBoundary';
 
 const DEFAULT_CENTER = [35.626288, -82.551141]; // Default to Asheville area
 const DEFAULT_ZOOM = 13;
@@ -50,7 +52,12 @@ function MapView({
     generatingPathCount,
     onStopGeneration,
     // Exclusion props
-    exclusionZones
+    exclusionZones,
+    poiPins,
+    poiRadiusMiles,
+    onPoiProbe,
+    onPoiKeep,
+    onPoiRemoveKept,
 }) {
     const [activeStyle, setActiveStyle] = useState(() => {
         try {
@@ -104,6 +111,7 @@ function MapView({
             const modeText = isExcludeMode ? 'EXCLUDE' : 'INCLUDE';
             if (activeTool === 'path') return `Click to build path (${modeText}). Ctrl+click = new start`;
             if (activeTool === 'lasso') return `Click and drag to select area to ${modeText}`;
+            if (activeTool === 'poi') return 'Click to probe a spot. Ctrl+click keeps that pin. Double-click a kept pin to remove it.';
         }
         return null;
     };
@@ -112,6 +120,7 @@ function MapView({
 
     const getModeLabel = () => {
         if (mode === 'display') {
+            if (activeTool === 'poi') return 'TOOL: NEAR';
             return activeTool ? `TOOL: ${activeTool.toUpperCase()}` : 'DISPLAY';
         }
         if (mode === 'graphCreate') return 'GRAPH CREATE';
@@ -196,6 +205,12 @@ function MapView({
                     attribution={MAP_STYLES[activeStyle].attribution}
                 />
 
+                <FitMapToGraphBoundary
+                    activeGraph={activeGraph}
+                    graphBoundaries={graphBoundaries}
+                    mode={mode}
+                />
+
                 {/* Click handler for input mode */}
                 <MapClickHandler mode={mode} onMapClick={onMapClick} />
 
@@ -228,6 +243,18 @@ function MapView({
                         }}
                     />
                 ))}
+
+                {mode === 'display' && (activeTool === 'poi' || poiPins?.length > 0) && (
+                    <PoiLayer
+                        active={activeTool === 'poi'}
+                        pins={poiPins}
+                        radiusMiles={poiRadiusMiles}
+                        approaches={currentPath?.properties?.poi_approaches}
+                        onProbe={onPoiProbe}
+                        onKeep={onPoiKeep}
+                        onRemoveKept={onPoiRemoveKept}
+                    />
+                )}
 
                 {/* Drawing handler for selection mode */}
                 <DrawingHandler

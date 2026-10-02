@@ -1,11 +1,19 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { filterByDistance, filterByDifficulty, filterBySelection, sortPaths } from '../utils/pathFiltering';
+import { annotatePathsWithPoi } from '../utils/poiDistance';
+
+const EMPTY_PINS = [];
+const POI_FALLBACK_COUNT = 8;
 
 /**
  * Manages all path set state - the core data store for the application.
  * A PathSet represents a starting point and all generated routes from it.
  */
-export function usePathSets() {
+export function usePathSets({
+    poiPins = EMPTY_PINS,
+    poiMatch = 'all',
+    poiRadiusMiles = null,
+} = {}) {
     // Map of pathSetId -> { markerPosition, paths: [] }
     const [pathSets, setPathSets] = useState({});
     const [activePathSetId, setActivePathSetId] = useState(null);
@@ -19,7 +27,8 @@ export function usePathSets() {
         return saved ? JSON.parse(saved) : [1, 10];
     });
     const [sortBy, setSortBy] = useState(() => {
-        return localStorage.getItem('sortBy') || 'total_miles';
+        const saved = localStorage.getItem('sortBy');
+        return saved && saved !== 'poi' ? saved : 'total_miles';
     });
     const [sortAscending, setSortAscending] = useState(true);
 
@@ -35,7 +44,9 @@ export function usePathSets() {
 
     // Save sortBy to localStorage
     useEffect(() => {
-        localStorage.setItem('sortBy', sortBy);
+        if (sortBy && sortBy !== 'poi') {
+            localStorage.setItem('sortBy', sortBy);
+        }
     }, [sortBy]);
 
 
@@ -130,9 +141,9 @@ export function usePathSets() {
         return activePathSetId ? pathSets[activePathSetId] : null;
     }, [pathSets, activePathSetId]);
 
-    // Get filtered paths based on distance and drawn selections
-    const filteredPaths = useMemo(() => {
-        if (!activePathSet?.paths?.length) return [];
+    // Get filtered paths based on distance, drawn selections, and dropped pins
+    const filterResult = useMemo(() => {
+        if (!activePathSet?.paths?.length) return { paths: [], poiNote: null, closestPoiId: null };
 
         let paths = activePathSet.paths;
 
@@ -172,9 +183,76 @@ export function usePathSets() {
             paths = filterBySelection(paths, strictIncludeMasks, looseIncludeMasks, excludeMask);
         }
 
-        // Sort by selected property
-        return sortPaths(paths, sortBy, sortAscending);
-    }, [activePathSet, distanceRange, difficultyRange, drawnSelections, sortBy, sortAscending]);
+        let poiNote = null;
+        if (poiPins.length > 0) {
+            paths = annotatePathsWithPoi(paths, poiPins, poiMatch);
+            const ranked = [...paths].sort(
+                (a, b) => (a.properties.poi_miles ?? Infinity) - (b.properties.poi_miles ?? Infinity)
+            );
+            const closest = ranked[0]?.properties?.poi_miles;
+            if (poiRadiusMiles != null && poiRadiusMiles > 0) {
+                const within = ranked.filter((p) => (p.properties.poi_miles ?? Infinity) <= poiRadiusMiles);
+                if (within.length === 0) {
+                    const shown = ranked.slice(0, Math.min(POI_FALLBACK_COUNT, ranked.length));
+                    poiNote = {
+                        fallback: true,
+                        closest,
+                        radius: poiRadiusMiles,
+                        shown: shown.length,
+                        withinCount: 0,
+                    };
+                    paths = shown;
+                } else {
+                    poiNote = {
+                        fallback: false,
+                        closest,
+                        radius: poiRadiusMiles,
+                        shown: within.length,
+                        withinCount: within.length,
+                    };
+                    paths = within;
+                }
+            } else {
+                poiNote = {
+                    fallback: false,
+                    closest,
+                    radius: null,
+                    shown: ranked.length,
+                    withinCount: ranked.length,
+                };
+            }
+        }
+
+        let closestPoiId = null;
+        if (poiPins.length > 0 && paths.length > 0) {
+            let best = paths[0];
+            for (const path of paths) {
+                const miles = path.properties?.poi_miles ?? Infinity;
+                if (miles < (best.properties?.poi_miles ?? Infinity)) best = path;
+            }
+            closestPoiId = best.id;
+        }
+
+        const effectiveSort = sortBy === 'poi' && poiPins.length === 0 ? 'total_miles' : sortBy;
+        return { paths: sortPaths(paths, effectiveSort, sortAscending), poiNote, closestPoiId };
+    }, [activePathSet, distanceRange, difficultyRange, drawnSelections, sortBy, sortAscending, poiPins, poiMatch, poiRadiusMiles]);
+
+    const filteredPaths = filterResult.paths;
+    const poiNote = filterResult.poiNote;
+    const closestPoiId = filterResult.closestPoiId;
+
+    const poiQueryKey = poiPins.length === 0
+        ? ''
+        : `${poiMatch}|${poiRadiusMiles ?? ''}|${poiPins.map((pin) => `${pin.id}:${pin.lat}:${pin.lng}`).join(';')}`;
+    const [appliedPoiKey, setAppliedPoiKey] = useState('');
+    if (poiQueryKey !== appliedPoiKey) {
+        setAppliedPoiKey(poiQueryKey);
+        if (poiQueryKey) {
+            if (sortBy !== 'poi') setSortBy('poi');
+            if (!sortAscending) setSortAscending(true);
+            if (closestPoiId && closestPoiId !== selectedPathId) setSelectedPathId(closestPoiId);
+        }
+    }
 
 
 
@@ -287,7 +365,7 @@ export function usePathSets() {
             // Find the index of the path in the source array
             // Note: currentPath is from filteredPaths, so we need to find it in the main list
             // However, paths objects are references, so we can find index by reference
-            const pathIndex = paths.indexOf(currentPath);
+            const pathIndex = paths.findIndex((p) => p.id === currentPath.id);
 
             if (pathIndex === -1) return prev;
 
@@ -306,11 +384,17 @@ export function usePathSets() {
                 (p[4] + 180) % 360                     // New Bearing
             ]).reverse();
 
+            const {
+                poi_miles: _poiMiles,
+                poi_approaches: _poiApproaches,
+                ...storedProperties
+            } = currentPath.properties;
+
             // Create new path object with updated profile
             const newPath = {
                 ...currentPath,
                 properties: {
-                    ...currentPath.properties,
+                    ...storedProperties,
                     elevation_profile: reversedProfile
                 }
             };
@@ -335,6 +419,7 @@ export function usePathSets() {
         currentPathIndex,
         currentPath,
         filteredPaths,
+        poiNote,
         distanceRange,
         difficultyRange,
         sortBy,

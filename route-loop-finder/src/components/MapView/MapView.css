@@ -288,3 +288,68 @@
         transform: translateY(0);
     }
 }
+
+.leaflet-container.poi-tool-active,
+.leaflet-container.poi-tool-active .leaflet-interactive {
+    cursor: crosshair;
+}
+
+.poi-marker.leaflet-div-icon {
+    background: none;
+    border: none;
+}
+
+.poi-marker__dot {
+    width: 28px;
+    height: 28px;
+    margin: 4px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    color: #3d2a00;
+    position: relative;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+.poi-marker__dot--probe {
+    background: #f6c945;
+    border: 2px dashed #8a5a00;
+}
+
+.poi-marker__dot--kept {
+    background: #f4a261;
+    border: 2px solid #9a3412;
+}
+
+.poi-marker__remove {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    width: 14px;
+    height: 14px;
+    border: none;
+    border-radius: 50%;
+    background: #7f1d1d;
+    color: white;
+    font-size: 11px;
+    line-height: 14px;
+    padding: 0;
+    cursor: pointer;
+}
+
+.leaflet-tooltip.poi-dist-tip {
+    background: #3d2a00;
+    color: white;
+    border: none;
+    border-radius: 3px;
+    box-shadow: none;
+    font-size: 11px;
+    padding: 1px 4px;
+}
+
+.leaflet-tooltip.poi-dist-tip::before {
+    display: none;
+}
