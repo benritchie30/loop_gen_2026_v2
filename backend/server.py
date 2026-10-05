@@ -49,10 +49,6 @@ async def handler(websocket):
                 elif msg_type == "STOP_GENERATION":
                     if gen_state["stop"] is not None:
                         gen_state["stop"].set()
-                elif msg_type == "GET_NODES_IN_REGION":
-                    await handle_get_nodes_in_region(websocket, data)
-                elif msg_type == "GET_NODES_NEAR_POLYLINE":
-                    await handle_get_nodes_near_polyline(websocket, data)
                 elif msg_type == "LIST_GRAPHS":
                     await send_graphs_list(websocket)
                 elif msg_type == "SWITCH_GRAPH":
@@ -325,38 +321,6 @@ async def _run_generation(websocket, data, stop_event):
         "pathSetId": path_set_id,
         "stopped": stopped,
     }))
-
-async def handle_get_nodes_in_region(websocket, data):
-    coordinates = data.get("coordinates") # [[lat, lng], ...]
-    if not coordinates:
-        return
-
-    nodes = gm.get_nodes_in_polygon(coordinates)
-    mask = gm.create_node_mask(nodes)
-    print("region path", nodes, mask)
-    
-    await websocket.send(json.dumps({
-        "type": "NODES_IN_REGION",
-        "mask": hex(mask)
-    }))
-
-async def handle_get_nodes_near_polyline(websocket, data):
-    coordinates = data.get("coordinates") # [[lat, lng], ...]
-    if not coordinates:
-        return
-
-    # Use edge-based matching for accurate visualization
-    nodes, edges_geojson = gm.get_edges_near_polyline(coordinates, buffer_meters=25.0)
-    mask = gm.create_node_mask(nodes)
-    
-    response = {
-        "type": "NODES_ALONG_PATH",
-        "mask": hex(mask)
-    }
-    if edges_geojson:
-        response["edges"] = edges_geojson
-    
-    await websocket.send(json.dumps(response))
 
 async def handle_get_graph_nodes(websocket, data):
     """Returns the coordinates of all nodes in the currently active graph."""

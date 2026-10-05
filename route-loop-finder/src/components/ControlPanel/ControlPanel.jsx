@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronDown, MapPin, MousePointer2, Pencil, Undo2, Ban, ArrowUpDown, Minimize2, Maximize2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronDown, Hand, Circle, Square, Lasso, Undo2, Ban, ArrowUpDown, Minimize2, Maximize2 } from 'lucide-react';
 import './ControlPanel.css';
 
 import PathInfo from './PathInfo';
@@ -69,20 +69,6 @@ function ControlPanel({
     setPrimaryColor,
     showGraphNodes,
     setShowGraphNodes,
-    hasPoiPins,
-    poiPinCount,
-    keptPinCount,
-    hasProbePin,
-    poiMatch,
-    setPoiMatch,
-    poiRadiusOn,
-    setPoiRadiusOn,
-    poiRadiusMiles,
-    setPoiRadiusMiles,
-    poiNote,
-    onClearProbe,
-    onClearKept,
-    onKeepProbe,
 }) {
     const canGoPrev = currentPathIndex > 0;
     const canGoNext = currentPathIndex < filteredPathsCount - 1;
@@ -464,104 +450,57 @@ function ControlPanel({
                             <div className="control-panel__section-title">Tools</div>
                             <div className="control-panel__tools">
                                 <button
-                                    className={`control-panel__tool-btn ${activeTool === 'path' ? 'active' : ''}`}
-                                    onClick={() => setActiveTool(activeTool === 'path' ? null : 'path')}
-                                    title="Path Tool (Select Along Road)"
+                                    className={`control-panel__tool-btn ${!activeTool ? 'active' : ''}`}
+                                    onClick={() => setActiveTool(null)}
+                                    title="Pan (K). Click a road to drop a pin."
                                 >
-                                    <Pencil size={18} />
+                                    <Hand size={18} />
                                 </button>
                                 <button
-                                    className={`control-panel__tool-btn ${activeTool === 'lasso' ? 'active' : ''}`}
-                                    onClick={() => setActiveTool(activeTool === 'lasso' ? null : 'lasso')}
-                                    title="Lasso Tool (Select Area)"
+                                    className={`control-panel__tool-btn ${activeTool === 'circle' ? 'active' : ''}`}
+                                    onClick={() => setActiveTool(activeTool === 'circle' ? null : 'circle')}
+                                    title="Circle (C). Click a road, or drag a radius."
                                 >
-                                    <MousePointer2 size={18} />
+                                    <Circle size={18} />
                                 </button>
                                 <button
-                                    className={`control-panel__tool-btn ${activeTool === 'poi' ? 'active' : ''}`}
-                                    onClick={() => setActiveTool(activeTool === 'poi' ? null : 'poi')}
-                                    title="Near a point (o). Click to probe, Ctrl+click to keep."
+                                    className={`control-panel__tool-btn ${activeTool === 'box' ? 'active' : ''}`}
+                                    onClick={() => setActiveTool(activeTool === 'box' ? null : 'box')}
+                                    title="Box (B). Click a road, or drag a rectangle."
                                 >
-                                    <MapPin size={18} />
+                                    <Square size={18} />
+                                </button>
+                                <button
+                                    className={`control-panel__tool-btn ${activeTool === 'freeform' ? 'active' : ''}`}
+                                    onClick={() => setActiveTool(activeTool === 'freeform' ? null : 'freeform')}
+                                    title="Freeform (F). Click a road, or drag a shape."
+                                >
+                                    <Lasso size={18} />
                                 </button>
                                 <button
                                     className={`control-panel__tool-btn ${isExcludeMode ? 'active exclude' : ''}`}
                                     onClick={() => setIsExcludeMode(!isExcludeMode)}
-                                    title="Toggle Exclude Mode (d)"
+                                    title="Exclude (D). Hold Shift to exclude one selection."
                                 >
                                     <Ban size={18} />
                                 </button>
                                 <button
                                     className="control-panel__tool-btn"
                                     onClick={onUndo}
-                                    title="Undo Last Selection (z)"
+                                    title="Undo last pin or area (Z)"
                                 >
                                     <Undo2 size={18} />
                                 </button>
                             </div>
-                            {(activeTool === 'poi' || hasPoiPins) && (
-                                <div className="poi-controls">
-                                    <p className="poi-controls__hint">
-                                        Click the map to probe. Ctrl+click keeps that pin. Double-click or × removes a kept pin. Esc clears the probe.
-                                    </p>
-                                    {poiPinCount > 1 && (
-                                        <div className="poi-controls__match">
-                                            <button
-                                                type="button"
-                                                className={poiMatch === 'all' ? 'active' : ''}
-                                                onClick={() => setPoiMatch('all')}
-                                            >
-                                                All pins
-                                            </button>
-                                            <button
-                                                type="button"
-                                                className={poiMatch === 'any' ? 'active' : ''}
-                                                onClick={() => setPoiMatch('any')}
-                                            >
-                                                Any pin
-                                            </button>
-                                        </div>
-                                    )}
-                                    <label className="poi-controls__radius">
-                                        <input
-                                            type="checkbox"
-                                            checked={poiRadiusOn}
-                                            onChange={(e) => setPoiRadiusOn(e.target.checked)}
-                                        />
-                                        <span>Within {poiRadiusMiles.toFixed(1)} mi</span>
-                                    </label>
-                                    {poiRadiusOn && (
-                                        <input
-                                            type="range"
-                                            min="0.1"
-                                            max="3"
-                                            step="0.1"
-                                            value={poiRadiusMiles}
-                                            onChange={(e) => setPoiRadiusMiles(parseFloat(e.target.value))}
-                                            aria-label="Maximum distance from pins"
-                                        />
-                                    )}
-                                    <div className="poi-controls__actions">
-                                        {hasProbePin && (
-                                            <button type="button" onClick={onKeepProbe}>Keep probe</button>
-                                        )}
-                                        {hasProbePin && (
-                                            <button type="button" onClick={onClearProbe}>Clear probe</button>
-                                        )}
-                                        {keptPinCount > 0 && (
-                                            <button type="button" onClick={onClearKept}>Clear pins</button>
-                                        )}
-                                    </div>
-                                    {poiNote && (
-                                        <p className="poi-controls__note">
-                                            {poiNote.fallback
-                                                ? `None within ${poiNote.radius.toFixed(1)} mi. Showing the ${poiNote.shown} closest. Nearest is ${formatNoteMiles(poiNote.closest)}.`
-                                                : poiNote.radius
-                                                    ? `${poiNote.withinCount} ${poiNote.withinCount === 1 ? 'route comes' : 'routes come'} within ${poiNote.radius.toFixed(1)} mi.`
-                                                    : `Nearest approach is ${formatNoteMiles(poiNote.closest)}.`}
-                                        </p>
-                                    )}
-                                </div>
+                            {activeTool && (
+                                <p className="tool-hint">
+                                    Click a road to drop a pin.
+                                    {activeTool === 'circle' && ' Drag to set a radius.'}
+                                    {activeTool === 'box' && ' Drag to draw a rectangle.'}
+                                    {activeTool === 'freeform' && ' Drag to draw a shape.'}
+                                    {' Double-click a pin to remove it.'}
+                                    {isExcludeMode ? ' Exclude is on.' : ' Hold Shift to exclude.'}
+                                </p>
                             )}
                         </div>
                     )}
@@ -662,21 +601,20 @@ function ControlPanel({
                                         className="control-panel__select"
                                         style={{ flex: 1 }}
                                     >
+                                        <option value="similar">Similar routes</option>
                                         <option value="total_miles">Distance</option>
                                         <option value="difficulty">Difficulty</option>
                                         <option value="total_climb_ft">Total Climbing Distance</option>
                                         <option value="loop_ratio">Loop Path Percentage</option>
                                         <option value="turns">Number of Turns</option>
                                         <option value="discomfort">Discomfort</option>
-                                        <option value="spatial">Spatial Flow</option>
-                                        {hasPoiPins && (
-                                            <option value="poi">Closest to pins</option>
-                                        )}
                                     </select>
                                     <button
                                         className="control-panel__tool-btn"
                                         onClick={() => setSortAscending(!sortAscending)}
-                                        title={sortAscending ? 'Ascending' : 'Descending'}
+                                        title={sortBy === 'similar'
+                                            ? (sortAscending ? 'Start with shortest' : 'Start with longest')
+                                            : (sortAscending ? 'Ascending' : 'Descending')}
                                         style={{ minWidth: '32px' }}
                                     >
                                         <ArrowUpDown size={16} />
@@ -756,9 +694,3 @@ function SectionToggle({ title, collapsed, onToggle }) {
 }
 
 export default ControlPanel;
-
-function formatNoteMiles(miles) {
-    if (typeof miles !== 'number' || !Number.isFinite(miles)) return '—';
-    if (miles < 0.1) return `${Math.round(miles * 5280)} ft`;
-    return `${miles.toFixed(2)} mi`;
-}

@@ -212,6 +212,7 @@
 /* Tools */
 .control-panel__tools {
     display: flex;
+    flex-wrap: wrap;
     gap: var(--space-xs);
     background: var(--color-surface);
     padding: var(--space-xs);
@@ -219,7 +220,7 @@
 }
 
 .control-panel__tool-btn {
-    flex: 1;
+    flex: 1 1 36px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -245,59 +246,11 @@
     /* Red for exclude */
 }
 
-.poi-controls {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin-top: 10px;
-}
-
-.poi-controls__hint,
-.poi-controls__note {
-    margin: 0;
+.tool-hint {
+    margin: 8px 2px 0;
     font-size: 12px;
     line-height: 1.35;
     color: var(--color-text-muted);
-}
-
-.poi-controls__match {
-    display: flex;
-    gap: 4px;
-}
-
-.poi-controls__match button,
-.poi-controls__actions button {
-    flex: 1;
-    border: 1px solid var(--color-border);
-    background: var(--color-surface);
-    color: var(--color-text);
-    border-radius: var(--radius-sm);
-    padding: 4px 8px;
-    font-size: 12px;
-    cursor: pointer;
-}
-
-.poi-controls__match button.active {
-    background: var(--color-primary);
-    color: white;
-    border-color: var(--color-primary);
-}
-
-.poi-controls__radius {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    cursor: pointer;
-}
-
-.poi-controls__actions {
-    display: flex;
-    gap: 4px;
-}
-
-.poi-controls input[type="range"] {
-    width: 100%;
 }
 
 /* Empty state */

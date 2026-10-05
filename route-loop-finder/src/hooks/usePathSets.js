@@ -1,19 +1,12 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { filterByDistance, filterByDifficulty, filterBySelection, sortPaths } from '../utils/pathFiltering';
-import { annotatePathsWithPoi } from '../utils/poiDistance';
-
-const EMPTY_PINS = [];
-const POI_FALLBACK_COUNT = 8;
+import { filterByDistance, filterByDifficulty, sortPaths } from '../utils/pathFiltering';
+import { filterByRouteSelections } from '../utils/routeSelections';
 
 /**
  * Manages all path set state - the core data store for the application.
  * A PathSet represents a starting point and all generated routes from it.
  */
-export function usePathSets({
-    poiPins = EMPTY_PINS,
-    poiMatch = 'all',
-    poiRadiusMiles = null,
-} = {}) {
+export function usePathSets() {
     // Map of pathSetId -> { markerPosition, paths: [] }
     const [pathSets, setPathSets] = useState({});
     const [activePathSetId, setActivePathSetId] = useState(null);
@@ -28,9 +21,13 @@ export function usePathSets({
     });
     const [sortBy, setSortBy] = useState(() => {
         const saved = localStorage.getItem('sortBy');
-        return saved && saved !== 'poi' ? saved : 'total_miles';
+        if (!saved || saved === 'poi') return 'total_miles';
+        if (saved === 'spatial') return 'similar';
+        return saved;
     });
     const [sortAscending, setSortAscending] = useState(true);
+    const sortByRef = useRef(sortBy);
+    sortByRef.current = sortBy;
 
     // Save distanceRange to localStorage
     useEffect(() => {
@@ -44,13 +41,13 @@ export function usePathSets({
 
     // Save sortBy to localStorage
     useEffect(() => {
-        if (sortBy && sortBy !== 'poi') {
+        if (sortBy) {
             localStorage.setItem('sortBy', sortBy);
         }
     }, [sortBy]);
 
 
-    // drawnSelections: Array of { id, mask, type: 'include'|'exclude', geometry }
+    // drawnSelections: { id, type: 'include'|'exclude', shape, geometry }
     const [drawnSelections, setDrawnSelections] = useState([]);
 
     // Create a new path set when generation starts
@@ -65,6 +62,7 @@ export function usePathSets({
         }));
         setActivePathSetId(pathSetId);
         setSelectedPathId(null);
+        setDrawnSelections([]);
     }, []);
 
     // Add a path to an existing path set
@@ -109,6 +107,7 @@ export function usePathSets({
 
     // Select a path set to display
     const selectPathSet = useCallback((pathSetId) => {
+        setDrawnSelections([]);
         if (!pathSetId) {
             setActivePathSetId(null);
             return;
@@ -122,6 +121,12 @@ export function usePathSets({
     // Add a drawn selection for filtering
     const addDrawnSelection = useCallback((selectionData) => {
         setDrawnSelections(prev => [...prev, selectionData]);
+        setSelectedPathId(null);
+        const currentSort = sortByRef.current;
+        if (currentSort === 'total_miles' || currentSort === 'spatial' || currentSort === 'poi') {
+            setSortBy('similar');
+            setSortAscending(true);
+        }
     }, []);
 
     // Clear drawn selections
@@ -134,6 +139,12 @@ export function usePathSets({
             if (prev.length === 0) return prev;
             return prev.slice(0, -1);
         });
+        setSelectedPathId(null);
+    }, []);
+
+    const removeSelection = useCallback((id) => {
+        setDrawnSelections(prev => prev.filter((selection) => selection.id !== id));
+        setSelectedPathId(null);
     }, []);
 
     // Get the active path set
@@ -142,117 +153,15 @@ export function usePathSets({
     }, [pathSets, activePathSetId]);
 
     // Get filtered paths based on distance, drawn selections, and dropped pins
-    const filterResult = useMemo(() => {
-        if (!activePathSet?.paths?.length) return { paths: [], poiNote: null, closestPoiId: null };
+    const filteredPaths = useMemo(() => {
+        if (!activePathSet?.paths?.length) return [];
 
         let paths = activePathSet.paths;
-
-        // Filter by distance
         paths = filterByDistance(paths, distanceRange[0], distanceRange[1]);
-
-        // Filter by difficulty
         paths = filterByDifficulty(paths, difficultyRange[0], difficultyRange[1]);
-
-        // Filter by drawn selection masks if any
-        if (drawnSelections.length > 0) {
-            // Aggregate masks
-            let strictIncludeMasks = []; // For 'path' tool (ALL nodes)
-            let looseIncludeMasks = [];  // For 'lasso' tool (ANY node)
-            let excludeMask = BigInt(0); // Single BigInt for OR logic
-
-            drawnSelections.forEach(selection => {
-                // Handle both old structure (backward compatibility) and new GeoJSON structure
-                const props = selection.properties || selection;
-                const mask = BigInt(props.mask || '0');
-                const tool = props.tool || 'lasso'; // Default to lasso if undefined (backward compat)
-
-                if (props.type === 'exclude') {
-                    excludeMask = excludeMask | mask;
-                } else {
-                    // Add to appropriate inclusion list
-                    if (mask > BigInt(0)) {
-                        if (tool === 'path') {
-                            strictIncludeMasks.push(mask);
-                        } else {
-                            looseIncludeMasks.push(mask);
-                        }
-                    }
-                }
-            });
-
-            paths = filterBySelection(paths, strictIncludeMasks, looseIncludeMasks, excludeMask);
-        }
-
-        let poiNote = null;
-        if (poiPins.length > 0) {
-            paths = annotatePathsWithPoi(paths, poiPins, poiMatch);
-            const ranked = [...paths].sort(
-                (a, b) => (a.properties.poi_miles ?? Infinity) - (b.properties.poi_miles ?? Infinity)
-            );
-            const closest = ranked[0]?.properties?.poi_miles;
-            if (poiRadiusMiles != null && poiRadiusMiles > 0) {
-                const within = ranked.filter((p) => (p.properties.poi_miles ?? Infinity) <= poiRadiusMiles);
-                if (within.length === 0) {
-                    const shown = ranked.slice(0, Math.min(POI_FALLBACK_COUNT, ranked.length));
-                    poiNote = {
-                        fallback: true,
-                        closest,
-                        radius: poiRadiusMiles,
-                        shown: shown.length,
-                        withinCount: 0,
-                    };
-                    paths = shown;
-                } else {
-                    poiNote = {
-                        fallback: false,
-                        closest,
-                        radius: poiRadiusMiles,
-                        shown: within.length,
-                        withinCount: within.length,
-                    };
-                    paths = within;
-                }
-            } else {
-                poiNote = {
-                    fallback: false,
-                    closest,
-                    radius: null,
-                    shown: ranked.length,
-                    withinCount: ranked.length,
-                };
-            }
-        }
-
-        let closestPoiId = null;
-        if (poiPins.length > 0 && paths.length > 0) {
-            let best = paths[0];
-            for (const path of paths) {
-                const miles = path.properties?.poi_miles ?? Infinity;
-                if (miles < (best.properties?.poi_miles ?? Infinity)) best = path;
-            }
-            closestPoiId = best.id;
-        }
-
-        const effectiveSort = sortBy === 'poi' && poiPins.length === 0 ? 'total_miles' : sortBy;
-        return { paths: sortPaths(paths, effectiveSort, sortAscending), poiNote, closestPoiId };
-    }, [activePathSet, distanceRange, difficultyRange, drawnSelections, sortBy, sortAscending, poiPins, poiMatch, poiRadiusMiles]);
-
-    const filteredPaths = filterResult.paths;
-    const poiNote = filterResult.poiNote;
-    const closestPoiId = filterResult.closestPoiId;
-
-    const poiQueryKey = poiPins.length === 0
-        ? ''
-        : `${poiMatch}|${poiRadiusMiles ?? ''}|${poiPins.map((pin) => `${pin.id}:${pin.lat}:${pin.lng}`).join(';')}`;
-    const [appliedPoiKey, setAppliedPoiKey] = useState('');
-    if (poiQueryKey !== appliedPoiKey) {
-        setAppliedPoiKey(poiQueryKey);
-        if (poiQueryKey) {
-            if (sortBy !== 'poi') setSortBy('poi');
-            if (!sortAscending) setSortAscending(true);
-            if (closestPoiId && closestPoiId !== selectedPathId) setSelectedPathId(closestPoiId);
-        }
-    }
+        paths = filterByRouteSelections(paths, drawnSelections);
+        return sortPaths(paths, sortBy, sortAscending);
+    }, [activePathSet, distanceRange, difficultyRange, drawnSelections, sortBy, sortAscending]);
 
 
 
@@ -384,17 +293,10 @@ export function usePathSets({
                 (p[4] + 180) % 360                     // New Bearing
             ]).reverse();
 
-            const {
-                poi_miles: _poiMiles,
-                poi_approaches: _poiApproaches,
-                ...storedProperties
-            } = currentPath.properties;
-
-            // Create new path object with updated profile
             const newPath = {
                 ...currentPath,
                 properties: {
-                    ...storedProperties,
+                    ...currentPath.properties,
                     elevation_profile: reversedProfile
                 }
             };
@@ -419,7 +321,6 @@ export function usePathSets({
         currentPathIndex,
         currentPath,
         filteredPaths,
-        poiNote,
         distanceRange,
         difficultyRange,
         sortBy,
@@ -435,6 +336,7 @@ export function usePathSets({
         addDrawnSelection,
         clearDrawnSelections,
         undoLastSelection,
+        removeSelection,
         setDistanceRange,
         setDifficultyRange,
         setSortBy: handleSetSortBy,

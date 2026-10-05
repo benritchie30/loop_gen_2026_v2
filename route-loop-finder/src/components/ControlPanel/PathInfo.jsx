@@ -1,5 +1,3 @@
-import { formatApproachMiles } from '../../utils/poiDistance';
-
 /**
  * Displays statistics about the currently selected path.
  */
@@ -63,24 +61,6 @@ function PathInfo({ path }) {
                 <span className="path-info__label">Difficulty</span>
                 <span className="path-info__value">{difficulty}/10</span>
             </div>
-
-            {Array.isArray(props.poi_approaches) && props.poi_approaches.length > 0 && (
-                props.poi_approaches.length === 1 ? (
-                    <div className="path-info__item">
-                        <span className="path-info__label">Closest approach</span>
-                        <span className="path-info__value">{formatApproachMiles(props.poi_miles)}</span>
-                    </div>
-                ) : (
-                    props.poi_approaches.map((approach) => (
-                        <div className="path-info__item" key={approach.id}>
-                            <span className="path-info__label">
-                                {approach.kind === 'probe' ? 'Probe' : `Pin ${approach.label}`}
-                            </span>
-                            <span className="path-info__value">{formatApproachMiles(approach.miles)}</span>
-                        </div>
-                    ))
-                )
-            )}
         </div>
     );
 }

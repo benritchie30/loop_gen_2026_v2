@@ -1,15 +1,15 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Rectangle, Polygon, Circle, Pane } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import './MapView.css';
 
 import MapClickHandler from './MapClickHandler';
 import DrawingHandler from './DrawingHandler';
+import SelectionLayer from './SelectionLayer';
 import PathMarker from './PathMarker';
 import PathRenderer from './PathRenderer';
 import BoundsSelector from './BoundsSelector';
 import MapTileSwitcher, { MAP_STYLES } from './MapTileSwitcher';
-import PoiLayer from './PoiLayer';
 import FitMapToGraphBoundary from './FitMapToGraphBoundary';
 
 const DEFAULT_CENTER = [35.626288, -82.551141]; // Default to Asheville area
@@ -20,7 +20,8 @@ const DEFAULT_ZOOM = 13;
  */
 function MapView({
     mode, // 'input', 'display', or 'graphCreate'
-    activeTool, // 'path', 'lasso', or null
+    activeTool, // 'circle' | 'box' | 'freeform' | null (pan)
+    exclusionDraw,
     isExcludeMode, // boolean
     wsStatus,
     pendingMarker,
@@ -32,12 +33,14 @@ function MapView({
     onMapClick,
     onMarkerClick,
     onDrawingComplete,
+    onSelection,
+    onRemoveSelection,
+    draftingRef,
     graphBounds,
     onGraphBoundsChange,
     graphCreateMode,
     graphBoundaries,
     activeGraph,
-    pathUndoRef,
     showArrows,
     showCentroids,
     primaryColor,
@@ -53,11 +56,6 @@ function MapView({
     onStopGeneration,
     // Exclusion props
     exclusionZones,
-    poiPins,
-    poiRadiusMiles,
-    onPoiProbe,
-    onPoiKeep,
-    onPoiRemoveKept,
 }) {
     const [activeStyle, setActiveStyle] = useState(() => {
         try {
@@ -90,8 +88,18 @@ function MapView({
     };
 
     const { center, zoom } = getSavedPosition();
+    const [notice, setNotice] = useState('');
+    const noticeTimer = useRef(null);
+    useEffect(() => () => clearTimeout(noticeTimer.current), []);
+
+    const showNotice = (text) => {
+        setNotice(text);
+        clearTimeout(noticeTimer.current);
+        noticeTimer.current = setTimeout(() => setNotice(''), 1600);
+    };
 
     const getHintText = () => {
+        if (notice) return notice;
         if (mode === 'input') {
             if (pendingMarker) {
                 return 'Press Enter to generate routes from this point';
@@ -99,6 +107,7 @@ function MapView({
             return null;
         }
         if (mode === 'graphCreate') {
+            if (exclusionDraw) return 'Drag a shape to exclude it from the graph';
             if (graphCreateMode === 'polygon') {
                 return 'Click to add polygon vertices, then press Enter';
             }
@@ -107,12 +116,10 @@ function MapView({
             }
             return 'Drag the markers to set graph bounds, then press Enter';
         }
-        if (activeTool) {
-            const modeText = isExcludeMode ? 'EXCLUDE' : 'INCLUDE';
-            if (activeTool === 'path') return `Click to build path (${modeText}). Ctrl+click = new start`;
-            if (activeTool === 'lasso') return `Click and drag to select area to ${modeText}`;
-            if (activeTool === 'poi') return 'Click to probe a spot. Ctrl+click keeps that pin. Double-click a kept pin to remove it.';
-        }
+        if (!activeTool) return 'Click a road to drop a pin. Drag to pan. Shift excludes.';
+        if (activeTool === 'circle') return 'Click a road for a pin, or drag the radius. Shift excludes.';
+        if (activeTool === 'box') return 'Click a road for a pin, or drag a rectangle. Shift excludes.';
+        if (activeTool === 'freeform') return 'Click a road for a pin, or drag a shape. Shift excludes.';
         return null;
     };
 
@@ -120,8 +127,11 @@ function MapView({
 
     const getModeLabel = () => {
         if (mode === 'display') {
-            if (activeTool === 'poi') return 'TOOL: NEAR';
-            return activeTool ? `TOOL: ${activeTool.toUpperCase()}` : 'DISPLAY';
+            if (!activeTool) return 'PAN';
+            if (activeTool === 'circle') return 'CIRCLE';
+            if (activeTool === 'box') return 'BOX';
+            if (activeTool === 'freeform') return 'FREEFORM';
+            return 'DISPLAY';
         }
         if (mode === 'graphCreate') return 'GRAPH CREATE';
         return mode;
@@ -244,24 +254,24 @@ function MapView({
                     />
                 ))}
 
-                {mode === 'display' && (activeTool === 'poi' || poiPins?.length > 0) && (
-                    <PoiLayer
-                        active={activeTool === 'poi'}
-                        pins={poiPins}
-                        radiusMiles={poiRadiusMiles}
-                        approaches={currentPath?.properties?.poi_approaches}
-                        onProbe={onPoiProbe}
-                        onKeep={onPoiKeep}
-                        onRemoveKept={onPoiRemoveKept}
+                {mode === 'display' && (
+                    <SelectionLayer
+                        selections={drawnSelections || []}
+                        onRemove={onRemoveSelection}
+                        lockDoubleClick={!!activeTool}
                     />
                 )}
 
-                {/* Drawing handler for selection mode */}
                 <DrawingHandler
                     activeTool={activeTool}
                     isExcludeMode={isExcludeMode}
+                    exclusionDraw={exclusionDraw}
+                    snapPaths={filteredPaths}
+                    onSelection={onSelection}
                     onDrawingComplete={onDrawingComplete}
-                    onPathPointUndo={pathUndoRef}
+                    onSnapMiss={() => showNotice('No route here')}
+                    draftingRef={draftingRef}
+                    pinOnClick={mode === 'display' && !activeTool}
                 />
 
                 {/* Pending marker (blue) - shown while user is picking a spot */}
@@ -297,10 +307,8 @@ function MapView({
                     <PathRenderer
                         currentPath={currentPath}
                         filteredPaths={filteredPaths}
-                        drawnSelections={drawnSelections}
                         backgroundPane="backgroundPaths"
                         activePane="activePath"
-                        selectionPane="tools"
                         showArrows={showArrows}
                         showCentroids={showCentroids}
                         primaryColor={primaryColor}
@@ -308,6 +316,7 @@ function MapView({
                         onHover={onHover}
                         showPathPreview={showPathPreview}
                         pathPreviewOpacity={pathPreviewOpacity}
+                        pathsInteractive={!activeTool}
                     />
                 )}
 

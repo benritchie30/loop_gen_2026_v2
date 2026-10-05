@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useState, useRef, useMemo } from 'react';
+import { useEffect, useCallback, useState, useRef } from 'react';
 import { Activity } from 'lucide-react';
 import './App.css';
 
@@ -69,31 +69,6 @@ function App() {
   // Initialize hooks
   const { status: wsStatus, sendMessage, subscribe } = useWebSocket();
 
-  const pinSeq = useRef(1);
-  const [probePin, setProbePin] = useState(null);
-  const [keptPins, setKeptPins] = useState([]);
-  const [poiMatch, setPoiMatch] = useState('all');
-  const [poiRadiusOn, setPoiRadiusOn] = useState(false);
-  const [poiRadiusMiles, setPoiRadiusMiles] = useState(0.5);
-
-  const poiPins = useMemo(() => {
-    const pins = keptPins.map((pin, index) => ({
-      ...pin,
-      kind: 'kept',
-      label: String(index + 1),
-    }));
-    if (probePin) {
-      pins.push({
-        id: 'probe',
-        kind: 'probe',
-        label: '•',
-        lat: probePin.lat,
-        lng: probePin.lng,
-      });
-    }
-    return pins;
-  }, [keptPins, probePin]);
-
   const {
     pathSets,
     pathSetMarkers,
@@ -102,7 +77,6 @@ function App() {
     currentPath,
     currentPathIndex,
     filteredPaths,
-    poiNote,
     distanceRange,
     difficultyRange,
     sortBy,
@@ -124,66 +98,23 @@ function App() {
     goToFirst,
     goToLast,
     reverseCurrentPathProfile,
-    undoLastSelection
-  } = usePathSets({
-    poiPins,
-    poiMatch,
-    poiRadiusMiles: poiRadiusOn ? poiRadiusMiles : null,
-  });
+    undoLastSelection,
+    removeSelection
+  } = usePathSets();
 
   const {
     mode,
     setMode,
     pendingMarker,
-    setMarkerPosition,
-    clearPendingMarker
+    setMarkerPosition
   } = useAppMode();
 
-  // Local state for tools
-  const [activeTool, setActiveTool] = useState(null); // 'path', 'lasso', 'poi', or null
+  // Local state for tools. null means pan.
+  const [activeTool, setActiveTool] = useState(null);
   const [isExcludeMode, setIsExcludeMode] = useState(false);
   const [isElevationMinimized, setIsElevationMinimized] = useState(false);
   const [hoveredPoint, setHoveredPoint] = useState(null);
-
-  const prevSortRef = useRef(sortBy === 'poi' ? 'total_miles' : sortBy);
-  if (sortBy !== 'poi') prevSortRef.current = sortBy;
-  const hadPinsRef = useRef(false);
-  const sortByRef = useRef(sortBy);
-  sortByRef.current = sortBy;
-
-  useEffect(() => {
-    const hasPins = poiPins.length > 0;
-    if (!hasPins && hadPinsRef.current && sortByRef.current === 'poi') {
-      setSortBy(prevSortRef.current || 'total_miles');
-    }
-    hadPinsRef.current = hasPins;
-  }, [poiPins.length, setSortBy]);
-
-  const handlePoiProbe = useCallback((point) => {
-    setProbePin(point);
-  }, []);
-
-  const handlePoiKeep = useCallback((point) => {
-    const source = probePin || point;
-    const id = pinSeq.current++;
-    setKeptPins((prev) => [...prev, { id, lat: source.lat, lng: source.lng }]);
-    if (probePin) setProbePin(null);
-  }, [probePin]);
-
-  const handleKeepProbe = useCallback(() => {
-    if (!probePin) return;
-    const id = pinSeq.current++;
-    setKeptPins((prev) => [...prev, { id, lat: probePin.lat, lng: probePin.lng }]);
-    setProbePin(null);
-  }, [probePin]);
-
-  const handleRemoveKept = useCallback((id) => {
-    setKeptPins((prev) => prev.filter((pin) => pin.id !== id));
-  }, []);
-
-  const handleClearKept = useCallback(() => {
-    setKeptPins([]);
-  }, []);
+  const draftingRef = useRef(null);
 
   // Display Options
   const [showArrows, setShowArrows] = useState(true);
@@ -227,9 +158,6 @@ function App() {
     { id: 'distance_capped', label: 'Distance only (capped)' },
   ]);
 
-  // Ref for path tool undo handler
-  const pathUndoRef = useRef(null);
-
   const generatingPathSetId = Object.keys(pathSets).find(id => !pathSets[id].isComplete) || null;
   const isGenerating = generatingPathSetId !== null;
   const generatingPathCount = isGenerating ? pathSets[generatingPathSetId].paths.length : 0;
@@ -245,9 +173,6 @@ function App() {
       if (!pathSets[id].isComplete) completePathSet(id);
     });
   }, [wsStatus, pathSets, completePathSet]);
-
-  // Queue to track pending requests context (to know if response is include/exclude)
-  const pendingRequests = useRef([]);
 
   // Handle WebSocket messages
   useEffect(() => {
@@ -267,61 +192,6 @@ function App() {
         case 'GENERATION_COMPLETE':
           completePathSet(message.pathSetId);
           break;
-
-        case 'NODES_IN_REGION':
-        case 'NODES_ALONG_PATH': {
-          // Pop context to see if it was include or exclude
-          const context = pendingRequests.current.shift();
-          const type = context?.type || 'include'; // default to include if lost
-
-          // For path tool: use server-returned edge geometry if available
-          // For lasso tool: construct geometry from user-drawn coordinates
-          let selectionFeature;
-          if (message.edges && context?.tool === 'path') {
-            // Use the actual matched edge geometry from the server
-            selectionFeature = {
-              ...message.edges,
-              properties: {
-                ...message.edges.properties,
-                mask: message.mask,
-                type: type,
-                tool: 'path'
-              }
-            };
-          } else {
-            // Construct GeoJSON geometry from user-drawn coordinates
-            let geometry = null;
-            if (context?.coordinates) {
-              const coords = context.coordinates.map(([lat, lng]) => [lng, lat]);
-
-              if (context.tool === 'lasso') {
-                if (coords.length > 0) {
-                  const first = coords[0];
-                  const last = coords[coords.length - 1];
-                  if (first[0] !== last[0] || first[1] !== last[1]) {
-                    coords.push(first);
-                  }
-                }
-                geometry = { type: 'Polygon', coordinates: [coords] };
-              } else {
-                geometry = { type: 'LineString', coordinates: coords };
-              }
-            }
-            selectionFeature = {
-              type: "Feature",
-              geometry: geometry,
-              properties: {
-                mask: message.mask,
-                type: type,
-                tool: context?.tool
-              }
-            };
-          }
-
-          console.log('[App] Received nodes in region:', message.mask, type);
-          addDrawnSelection(selectionFeature);
-          break;
-        }
 
         // Graph management messages
         case 'GRAPHS_LIST':
@@ -371,7 +241,7 @@ function App() {
     });
 
     return unsubscribe;
-  }, [subscribe, createPathSet, addPathToSet, completePathSet, addDrawnSelection, setMode]);
+  }, [subscribe, createPathSet, addPathToSet, completePathSet, setMode]);
 
   // Handle map click (in input mode)
   const handleMapClick = useCallback((position) => {
@@ -384,28 +254,16 @@ function App() {
     setMode('display');
   }, [selectPathSet, setMode]);
 
-  // Handle drawing complete
-  const handleDrawingComplete = useCallback((coordinates, tool, exclude) => {
-    // If drawing an exclusion zone (Graph Create Mode)
-    // Only if explicitly in drawing exclusion mode (set by GraphSelector)
-    if (isDrawingExclusion) {
-      if (tool === 'lasso' && coordinates.length > 2) {
-        setExclusionZones(prev => [...prev, coordinates]);
-        // Keep tool active for multiple zones
-      }
-      return;
-    }
+  const handleSelection = useCallback((selection) => {
+    addDrawnSelection(selection);
+    setActiveTool(null);
+  }, [addDrawnSelection]);
 
-    const context = { type: exclude ? 'exclude' : 'include', coordinates, tool };
-    pendingRequests.current.push(context);
-
-    if (tool === 'path') {
-      sendMessage('GET_NODES_NEAR_POLYLINE', { coordinates });
-    } else if (tool === 'lasso') {
-      sendMessage('GET_NODES_IN_REGION', { coordinates });
-      setActiveTool(null);
-    }
-  }, [sendMessage, setActiveTool, isDrawingExclusion]);
+  // Graph-creation exclusion zones stay local. Route filters never ask the backend.
+  const handleDrawingComplete = useCallback((coordinates, _tool, _exclude) => {
+    if (!isDrawingExclusion || coordinates.length <= 2) return;
+    setExclusionZones(prev => [...prev, coordinates]);
+  }, [isDrawingExclusion]);
 
   // Graph management handlers
   const handleSwitchGraph = useCallback((name) => {
@@ -513,6 +371,11 @@ function App() {
   // Keyboard Shortcuts Effect - Updated to use handleCreateGraph
   useEffect(() => {
     const handleKeyDown = (e) => {
+      const tag = e.target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) {
+        return;
+      }
+
       // Input Mode: Enter to start generation
       if (e.key === 'Enter' && mode === 'input' && pendingMarker) {
         // ... existing input mode logic ...
@@ -561,16 +424,17 @@ function App() {
 
       // Display Mode Shortcuts
       if (mode === 'display') {
-        // Escape: clear the probe pin, otherwise stop the running generator
-        if (e.key === 'Escape' && probePin) {
-          setProbePin(null);
-        } else if (e.key === 'Escape' && isGenerating && !activeTool) {
-          handleStopGeneration();
+        if (e.key === 'Escape') {
+          if (draftingRef.current?.()) return;
+          if (activeTool) {
+            setActiveTool(null);
+            return;
+          }
+          if (isGenerating) handleStopGeneration();
         }
 
         // Backspace: Return to Input Mode
         if (e.key === 'Backspace') {
-          console.log('Backspace pressed, returning to input mode');
           selectPathSet(null);
           setMode('input');
           setActiveTool(null);
@@ -591,42 +455,21 @@ function App() {
           setIsElevationMinimized(prev => !prev);
         }
 
-        // p: path tool
-        if (e.key === 'p' || e.key === 'P') {
-          setActiveTool(activeTool === 'path' ? null : 'path');
-        }
-
-        // l: lasso tool
-        if (e.key === 'l' || e.key === 'L') {
-          setActiveTool(activeTool === 'lasso' ? null : 'lasso');
-        }
-
-        // o: near-a-point tool
-        if ((e.key === 'o' || e.key === 'O') && !e.ctrlKey && !e.metaKey) {
-          setActiveTool(activeTool === 'poi' ? null : 'poi');
-        }
-
-        // k: pan / no tool
-        if (e.key === 'k' || e.key === 'K') {
-          setActiveTool(null);
-        }
-
-        // z: Undo last selection (or path point if in path tool)
-        if (e.key === 'z' || e.key === 'Z') {
-          // First try path tool undo (moves point back)
-          const pathHandledUndo = pathUndoRef.current?.();
-          if (!pathHandledUndo) {
-            // If path tool didn't handle it, do selection undo
-            undoLastSelection();
-          } else {
-            // Path tool moved the point back, also remove the last selection
+        if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+          const toolKeys = { c: 'circle', b: 'box', f: 'freeform' };
+          const tool = toolKeys[e.key.toLowerCase()];
+          if (tool) {
+            setActiveTool(activeTool === tool ? null : tool);
+          }
+          if (e.key === 'k' || e.key === 'K') {
+            setActiveTool(null);
+          }
+          if (e.key === 'z' || e.key === 'Z') {
             undoLastSelection();
           }
-        }
-
-        // d: Toggle Exclude mode
-        if (e.key === 'd' || e.key === 'D') {
-          setIsExcludeMode(prev => !prev);
+          if (e.key === 'd' || e.key === 'D') {
+            setIsExcludeMode(prev => !prev);
+          }
         }
       }
     }
@@ -635,7 +478,7 @@ function App() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [mode, pendingMarker, sendMessage, clearPendingMarker, selectPathSet, setMode, undoLastSelection, genSettings, graphBounds, isCreatingGraph, nextPath, prevPath, activeTool, setActiveTool, setIsExcludeMode, setIsElevationMinimized, pathUndoRef, graphCreateMode, handleCreateGraph, exclusionZones, setIsDrawingExclusion, isGenerating, handleStopGeneration, probePin]);
+  }, [mode, pendingMarker, sendMessage, selectPathSet, setMode, undoLastSelection, genSettings, graphBounds, isCreatingGraph, nextPath, prevPath, activeTool, setIsElevationMinimized, graphCreateMode, handleCreateGraph, exclusionZones, setIsDrawingExclusion, isGenerating, handleStopGeneration]);
 
   // Auto-show elevation window when path with elevation data is selected
   // Auto-show elevation window when path with elevation data is selected
@@ -673,8 +516,8 @@ function App() {
     <div className="app">
       <MapView
         mode={mode}
-        activeTool={activeTool || (isDrawingExclusion ? 'lasso' : null)}
-        // isExcludeMode passed below merged with isDrawingExclusion
+        activeTool={mode === 'graphCreate' && isDrawingExclusion ? 'freeform' : activeTool}
+        exclusionDraw={mode === 'graphCreate' && isDrawingExclusion}
         wsStatus={wsStatus}
         pendingMarker={pendingMarker}
         pathSetMarkers={pathSetMarkers}
@@ -685,12 +528,14 @@ function App() {
         onMapClick={handleMapClick}
         onMarkerClick={handleMarkerClick}
         onDrawingComplete={handleDrawingComplete}
+        onSelection={handleSelection}
+        onRemoveSelection={removeSelection}
+        draftingRef={draftingRef}
         graphBounds={graphBounds}
         onGraphBoundsChange={handleGraphBoundsChange}
         graphCreateMode={graphCreateMode}
         graphBoundaries={graphBoundaries}
         activeGraph={activeGraph}
-        pathUndoRef={pathUndoRef}
         showArrows={showArrows}
         showCentroids={showCentroids}
         primaryColor={primaryColor}
@@ -708,12 +553,7 @@ function App() {
         // Exclusion / Drawing props
         exclusionZones={exclusionZones}
         // Merge exclude mode logic: True if user toggled exclude mode OR if drawing an exclusion zone
-        isExcludeMode={isExcludeMode || isDrawingExclusion}
-        poiPins={poiPins}
-        poiRadiusMiles={poiRadiusOn ? poiRadiusMiles : null}
-        onPoiProbe={handlePoiProbe}
-        onPoiKeep={handlePoiKeep}
-        onPoiRemoveKept={handleRemoveKept}
+        isExcludeMode={isExcludeMode || (mode === 'graphCreate' && isDrawingExclusion)}
       />
 
       <ControlPanel
@@ -776,20 +616,6 @@ function App() {
 
         primaryColor={primaryColor}
         setPrimaryColor={setPrimaryColor}
-        hasPoiPins={poiPins.length > 0}
-        poiPinCount={poiPins.length}
-        keptPinCount={keptPins.length}
-        hasProbePin={!!probePin}
-        poiMatch={poiMatch}
-        setPoiMatch={setPoiMatch}
-        poiRadiusOn={poiRadiusOn}
-        setPoiRadiusOn={setPoiRadiusOn}
-        poiRadiusMiles={poiRadiusMiles}
-        setPoiRadiusMiles={setPoiRadiusMiles}
-        poiNote={poiNote}
-        onClearProbe={() => setProbePin(null)}
-        onClearKept={handleClearKept}
-        onKeepProbe={handleKeepProbe}
       />
 
       {/* Elevation Window & Toggle */}

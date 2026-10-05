@@ -5,7 +5,7 @@ import math
 from datetime import datetime
 import osmnx as ox
 import networkx as nx
-from shapely.geometry import Polygon, Point, LineString, MultiLineString, mapping
+from shapely.geometry import Polygon, Point, LineString
 from shapely.ops import unary_union
 import geopandas as gpd
 import matplotlib.pyplot as plt
@@ -148,137 +148,6 @@ class GraphManager:
         G = self.get_graph()
         return ox.nearest_nodes(G, lng, lat)
 
-    def get_nodes_in_polygon(self, coordinates: list) -> list:
-        """
-        Finds all nodes within a polygon defined by coordinates.
-        coordinates: List of [lat, lng] pairs (note: check if your polygon needs [lng, lat])
-        Returns a list of node IDs.
-        """
-        G = self.get_graph()
-        
-        # Ensure coordinates are in the correct order for Polygon (lng, lat)
-        # Frontend sends [lat, lng], so we swap
-        poly_coords = [(lng, lat) for lat, lng in coordinates]
-        
-        polygon = Polygon(poly_coords)
-        
-        nodes_in_region = []
-        
-        # Basic implementation: check every node. Optimization: use spatial index if needed.
-        # For typical graphs (thousands of nodes), this might be slow.
-        # Better: use ox.graph_to_gdfs to get nodes as GeoDataFrame, then sjoin or within.
-        
-        gdf_nodes = ox.graph_to_gdfs(G, nodes=True, edges=False)
-        
-        # Create a GeoSeries with the polygon
-        poly_gdf = gpd.GeoSeries([polygon], crs=gdf_nodes.crs) # Assumes graph crs matches if not specified, usually lat/lon is 4326
-
-        # Actually, ox graphs usually have crs. 
-        # If coordinates are lat/lng, we assume EPSG:4326.
-        
-        # Check if nodes are within the polygon
-        # This is strictly for "drawing" feature which returns a mask of nodes.
-        
-        # Let's do a simple bounding box check first if we care about perf, 
-        # but geopandas `within` is reasonably optimized.
-        
-        # However, checking every node might be heavy.
-        # Let's stick to the simplest correct method first.
-        
-        # Create geometry for all nodes
-        # filtered = gdf_nodes[gdf_nodes.geometry.within(polygon)]
-        
-        # Actually, let's just use the geometry from the GDF
-        mask = gdf_nodes.intersects(polygon)
-        filtered_nodes = gdf_nodes[mask]
-        
-        return filtered_nodes.index.tolist()
-
-    def get_nodes_near_polyline(self, coordinates: list, buffer_meters: float = 300.0) -> list:
-        """
-        Finds all nodes within a certain distance of a polyline.
-        coordinates: List of [lat, lng] pairs
-        buffer_meters: Distance in meters to buffer the line (approximate if using varying projection, 
-                       but for small areas simple degree conversion or treating as meters if projected is needed.
-                       However, osmnx graphs are usually unprojected (lat/lon). 
-                       Buffering lat/lon by 'meters' requires projection.)
-        """
-        G = self.get_graph()
-        
-        # Swap because frontend sends [lat, lng], shapely wants (lng, lat)
-        line_coords = [(lng, lat) for lat, lng in coordinates]
-        line = LineString(line_coords)
-        
-        # Project to UTM for accurate buffering in meters
-        # We can use the graph's UTM projection if it has one, or project the geometry.
-        # Simple heuristic: 1 degree approx 111km. 20m is approx 0.00018 degrees.
-        # Let's use a rough degree approximation for speed/simplicity if we don't want to reproject everything.
-        # 20m / 111000m/deg ~= 0.00018
-        buffer_degrees = buffer_meters / 111111.0
-        
-        polygon = line.buffer(buffer_degrees)
-        
-        gdf_nodes = ox.graph_to_gdfs(G, nodes=True, edges=False)
-        
-        mask = gdf_nodes.intersects(polygon)
-        filtered_nodes = gdf_nodes[mask]
-        
-        return filtered_nodes.index.tolist()
-
-    def get_edges_near_polyline(self, coordinates: list, buffer_meters: float = 25.0):
-        """
-        Finds shortest path between two clicked points on the graph.
-        Snaps both to nearest nodes, returns path nodes + edge GeoJSON.
-        """
-        G = self.get_graph()
-
-        if len(coordinates) < 2:
-            return [], None
-
-        start_lat, start_lng = coordinates[0]
-        end_lat, end_lng = coordinates[-1]
-
-        start_node = ox.nearest_nodes(G, start_lng, start_lat)
-        end_node = ox.nearest_nodes(G, end_lng, end_lat)
-
-        if start_node == end_node:
-            return [start_node], None
-
-        try:
-            path = nx.shortest_path(G, start_node, end_node, weight='length')
-        except nx.NetworkXNoPath:
-            print(f"No path found between {start_node} and {end_node}")
-            return [], None
-
-        # Extract edge geometries along the path
-        edge_geometries = []
-        for u, v in zip(path[:-1], path[1:]):
-            if G.has_edge(u, v):
-                data = G[u][v][0] if G.is_multigraph() else G[u][v]
-                if 'geometry' in data:
-                    edge_geometries.append(data['geometry'])
-                else:
-                    p1 = (G.nodes[u]['x'], G.nodes[u]['y'])
-                    p2 = (G.nodes[v]['x'], G.nodes[v]['y'])
-                    edge_geometries.append(LineString([p1, p2]))
-
-        edges_geojson = None
-        if edge_geometries:
-            multi = MultiLineString(edge_geometries)
-            edges_geojson = {
-                "type": "Feature",
-                "geometry": mapping(multi),
-                "properties": {}
-            }
-
-        return path, edges_geojson
-
-    def create_node_mask(self, node_ids: list) -> int:
-        """Creates a bitmask from a list of node IDs."""
-        mask = 0
-        for node_id in node_ids:
-            mask |= (1 << node_id)
-        return mask
 
     @staticmethod
     def _coerce_name(name_data):

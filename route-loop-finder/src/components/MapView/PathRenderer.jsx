@@ -6,7 +6,6 @@ import DirectionArrows from './DirectionArrows';
  * Renders paths on the map.
  * - Active path: bold dark navy line (always on top)
  * - Filtered paths: subtle translucent preview
- * - Drawn selections: muted amber highlight
  * - Direction arrows: small rotated arrows along the active path
  * - Centroid: small red dot (for spatial sort testing)
  * 
@@ -15,29 +14,17 @@ import DirectionArrows from './DirectionArrows';
 function PathRenderer({
     currentPath,
     filteredPaths,
-    drawnSelections,
     backgroundPane = 'overlayPane',
     activePane = 'overlayPane',
-    selectionPane = 'overlayPane',
     showArrows = true,
     showCentroids = false,
     primaryColor = 215,
     hoveredPoint,
     onHover,
     showPathPreview = true,
-    pathPreviewOpacity = 0.4
+    pathPreviewOpacity = 0.4,
+    pathsInteractive = true,
 }) {
-    // Style for inactive/background paths — very subtle, matching the theme but desaturated/lighter
-    const nearestPoiMiles = useMemo(() => {
-        if (!filteredPaths?.length) return null;
-        let nearest = Infinity;
-        for (const path of filteredPaths) {
-            const miles = path.properties?.poi_miles;
-            if (typeof miles === 'number' && miles < nearest) nearest = miles;
-        }
-        return Number.isFinite(nearest) ? nearest : null;
-    }, [filteredPaths]);
-
     const inactiveStyle = useMemo(() => ({
         weight: 2,
         color: `hsl(${primaryColor}, 40%, 65%)`, // Muted version of theme color
@@ -59,44 +46,9 @@ function PathRenderer({
     const arrowColor = secondaryColor;
     const centroidColor = secondaryColor;
 
-    // Style for drawn selection highlights — bright orange, wide, on top
-    const selectionStyle = useMemo(() => ({
-        weight: 8,
-        color: '#ff8c42',
-        opacity: 0.75
-    }), []);
-
-    // Style for exclude selections — bright red
-    const excludeStyle = useMemo(() => ({
-        weight: 8,
-        color: '#e74c3c',
-        opacity: 0.7
-    }), []);
-
-    // Generate unique keys for GeoJSON components
     const getPathKey = (path, index, prefix) => {
         const visited = path?.properties?.visited || index;
-        const poi = path?.properties?.poi_miles;
-        const poiKey = typeof poi === 'number' && Number.isFinite(poi) ? poi.toFixed(2) : '';
-        return `${prefix}-${visited}-${index}-${poiKey}`;
-    };
-
-    const previewStyleFor = (path) => {
-        if (nearestPoiMiles == null || typeof path.properties?.poi_miles !== 'number') {
-            return inactiveStyle;
-        }
-        const t = Math.min(1, Math.max(0, (path.properties.poi_miles - nearestPoiMiles) / 1));
-        return {
-            weight: 2,
-            color: `hsl(${primaryColor}, ${Math.round(40 - 18 * t)}%, ${Math.round(65 + 12 * t)}%)`,
-            opacity: pathPreviewOpacity * (1 - 0.8 * t),
-        };
-    };
-
-    // Get style for a selection based on its type
-    const getSelectionStyle = (selection) => {
-        const props = selection.properties || selection;
-        return props.type === 'exclude' ? excludeStyle : selectionStyle;
+        return `${prefix}-${visited}-${index}`;
     };
 
     // Handle mouse move on the active path
@@ -157,8 +109,9 @@ function PathRenderer({
                     <GeoJSON
                         key={getPathKey(path, index, 'inactive')}
                         data={path}
-                        style={previewStyleFor(path)}
+                        style={inactiveStyle}
                         pane={backgroundPane}
+                        interactive={pathsInteractive}
                     />
                 );
             })}
@@ -170,7 +123,8 @@ function PathRenderer({
                     data={currentPath}
                     style={activeStyle}
                     pane={activePane}
-                    onEachFeature={onActivePathTarget}
+                    interactive={pathsInteractive}
+                    onEachFeature={pathsInteractive ? onActivePathTarget : undefined}
                 />
             )}
 
@@ -213,15 +167,6 @@ function PathRenderer({
                 />
             )}
 
-            {/* Drawn selections — TOP layer, always visible */}
-            {drawnSelections?.map((selection, index) => (
-                <GeoJSON
-                    key={`selection-${index}`}
-                    data={selection}
-                    style={getSelectionStyle(selection)}
-                    pane={selectionPane}
-                />
-            ))}
         </>
     );
 }

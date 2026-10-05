@@ -14,10 +14,10 @@ This is a personal web app for generating looping run/bike routes. The user drop
 
 ## WebSocket contract
 
-Messages are JSON with a `type` field. Generation is a stream on that same socket: `START_GENERATION` → `PATHSET_CREATED` → many `PATH_RECEIVED` (GeoJSON Feature + properties) → `GENERATION_COMPLETE`. Graph create is `CREATE_GRAPH` → `GRAPH_CREATING` / `GRAPH_CREATED` or `GRAPH_CREATE_ERROR`. Drawing tools send `GET_NODES_IN_REGION` (lasso) or `GET_NODES_NEAR_POLYLINE` (path tool) and get back a hex **node bitmask** used only on the client to filter already-generated paths.
+Messages are JSON with a `type` field. Generation is a stream on that same socket: `START_GENERATION` → `PATHSET_CREATED` → many `PATH_RECEIVED` (GeoJSON Feature + properties) → `GENERATION_COMPLETE`. Graph create is `CREATE_GRAPH` → `GRAPH_CREATING` / `GRAPH_CREATED` or `GRAPH_CREATE_ERROR`.
 
 A generated "loop" is a **lollipop**: out-and-back stem + a loop in the middle + the stem reversed. That is intended, not a bug.
 
-Lasso means "must visit this area" (any node in the mask). Path tool means "must cover this exact snapped chain" (all nodes). Path tool is shortest-path between clicks, not a buffer around the drawn line.
+Route exploration is client-side. Circle, box, and freeform selections filter generated routes by elevation-profile coordinates (about every 50 m). A click drops a pin, including while panning. A drag draws the active shape. Each selection stacks; exclude drops routes that touch the shape. Nothing about these filters goes to the backend. The Similar sort walks routes that share ground, starting at the shortest or longest match. Graph-creation exclusion polygons are still drawn locally and sent with `CREATE_GRAPH`.
 
-Generation runs in a worker thread as a background task per connection; `STOP_GENERATION` sets a stop flag the search loop checks every iteration, and the server then sends `GENERATION_COMPLETE` with `stopped: true` (paths already sent are kept). A new `START_GENERATION` stops the previous one first. Switching graphs mid-session can leave stale path sets on the client. The frontend `algorithm` setting is unused; search is always turn-then-distance.
+Generation runs in a worker thread as a background task per connection; `STOP_GENERATION` sets a stop flag the search loop checks every iteration, and the server then sends `GENERATION_COMPLETE` with `stopped: true` (paths already sent are kept). A new `START_GENERATION` stops the previous one first. Switching graphs mid-session can leave stale path sets on the client.
