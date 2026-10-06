@@ -1,17 +1,36 @@
 import { useState } from 'react';
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronDown, Hand, Circle, Square, Lasso, Undo2, Ban, ArrowUpDown, Minimize2, Maximize2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronDown, Hand, Circle, Square, Lasso, Undo2, Ban, ArrowUpDown, Minimize2, Maximize2, Plus, Trash2, GripVertical } from 'lucide-react';
 import './ControlPanel.css';
 
 import PathInfo from './PathInfo';
-import DistanceFilter from './DistanceFilter';
-import DifficultyFilter from './DifficultyFilter';
+import RangeFilter from './RangeFilter';
 import GraphSelector from './GraphSelector';
-import ThemeSettings from './ThemeSettings';
+import { FILTER_METRICS, getFilterMetric } from '../../utils/pathFiltering';
 import {
     DEFAULT_ROAD_WEIGHTS,
     ROAD_WEIGHT_FIELDS,
     ROAD_WEIGHT_PRESETS,
 } from '../../utils/roadWeights';
+
+const SECTION_KEYS = ['tools', 'view', 'sort', 'filters', 'details'];
+const SECTION_LABELS = {
+    tools: 'Tools',
+    view: 'View Options',
+    sort: 'Sort By',
+    filters: 'Filters',
+    details: 'Path Details',
+};
+
+function readSectionOrder() {
+    let saved = [];
+    try {
+        saved = JSON.parse(localStorage.getItem('panelSectionOrder') || '[]');
+    } catch {
+        saved = [];
+    }
+    const known = Array.isArray(saved) ? saved.filter((key, i) => SECTION_KEYS.includes(key) && saved.indexOf(key) === i) : [];
+    return [...known, ...SECTION_KEYS.filter((key) => !known.includes(key))];
+}
 
 /**
  * Floating control panel for path navigation, filtering, and mode switching.
@@ -23,10 +42,11 @@ function ControlPanel({
     currentPathIndex,
     filteredPathsCount,
     totalPathsCount,
-    distanceRange,
-    setDistanceRange,
-    difficultyRange,
-    setDifficultyRange,
+    routeFilters,
+    filterBounds,
+    setFilterRange,
+    addRouteFilter,
+    removeRouteFilter,
     sortBy,
     setSortBy,
     sortAscending,
@@ -70,6 +90,9 @@ function ControlPanel({
     showGraphNodes,
     setShowGraphNodes,
 }) {
+    const [filterPickerOpen, setFilterPickerOpen] = useState(false);
+    const activeFilterKeys = new Set((routeFilters || []).map((filter) => filter.key));
+    const availableFilters = FILTER_METRICS.filter((metric) => !activeFilterKeys.has(metric.key));
     const canGoPrev = currentPathIndex > 0;
     const canGoNext = currentPathIndex < filteredPathsCount - 1;
     const [isMinimized, setIsMinimized] = useState(false);
@@ -78,9 +101,7 @@ function ControlPanel({
             generation: false,
             debug: true,
             view: true,
-            distance: true,
-            difficulty: true,
-            appearance: true,
+            filters: false,
         };
         try {
             const saved = JSON.parse(localStorage.getItem('panelSections') || '{}');
@@ -106,6 +127,89 @@ function ControlPanel({
                 : type === 'number' ? parseFloat(value)
                     : value
         }));
+    };
+
+    const [sectionOrder, setSectionOrder] = useState(readSectionOrder);
+    const [armedSection, setArmedSection] = useState(null);
+    const [draggingSection, setDraggingSection] = useState(null);
+    const [dropTarget, setDropTarget] = useState(null);
+
+    const sectionVisible = {
+        tools: mode === 'display',
+        view: true,
+        sort: hasActivePathSet,
+        filters: hasActivePathSet,
+        details: !!currentPath || hasActivePathSet,
+    };
+
+    const saveSectionOrder = (next) => {
+        setSectionOrder(next);
+        localStorage.setItem('panelSectionOrder', JSON.stringify(next));
+    };
+
+    const moveSection = (key, targetKey, after) => {
+        if (key === targetKey) return;
+        const next = sectionOrder.filter((k) => k !== key);
+        const targetIndex = next.indexOf(targetKey);
+        if (targetIndex < 0) return;
+        next.splice(after ? targetIndex + 1 : targetIndex, 0, key);
+        saveSectionOrder(next);
+    };
+
+    const nudgeSection = (key, direction) => {
+        const visible = sectionOrder.filter((k) => sectionVisible[k]);
+        const index = visible.indexOf(key);
+        const target = visible[index + direction];
+        if (!target) return;
+        moveSection(key, target, direction > 0);
+    };
+
+    const endSectionDrag = () => {
+        setArmedSection(null);
+        setDraggingSection(null);
+        setDropTarget(null);
+    };
+
+    const sectionProps = (key) => ({
+        id: key,
+        label: SECTION_LABELS[key],
+        order: sectionOrder.indexOf(key),
+        armed: armedSection === key,
+        dragging: draggingSection === key,
+        dropSide: dropTarget?.key === key ? (dropTarget.after ? 'after' : 'before') : null,
+        onArm: () => setArmedSection(key),
+        onDisarm: () => { if (!draggingSection) setArmedSection(null); },
+        onNudge: (direction) => nudgeSection(key, direction),
+        onDragStart: (e) => {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', key);
+            setDraggingSection(key);
+        },
+        onDragOver: (e) => {
+            if (!draggingSection) return;
+            e.preventDefault();
+            if (draggingSection === key) {
+                setDropTarget(null);
+                return;
+            }
+            const rect = e.currentTarget.getBoundingClientRect();
+            const after = e.clientY > rect.top + rect.height / 2;
+            if (dropTarget?.key !== key || dropTarget.after !== after) {
+                setDropTarget({ key, after });
+            }
+        },
+        onDragEnd: endSectionDrag,
+    });
+
+    const handleBodyDragOver = (e) => {
+        if (draggingSection) e.preventDefault();
+    };
+
+    const handleBodyDrop = (e) => {
+        if (!draggingSection) return;
+        e.preventDefault();
+        if (dropTarget) moveSection(draggingSection, dropTarget.key, dropTarget.after);
+        endSectionDrag();
     };
 
     const algorithmOptions = (algorithms && algorithms.length > 0)
@@ -209,7 +313,11 @@ function ControlPanel({
             )}
 
             {!isMinimized && (
-                <div className="control-panel__body">
+                <div
+                    className="control-panel__body"
+                    onDragOver={handleBodyDragOver}
+                    onDrop={handleBodyDrop}
+                >
                     {/* Graph selector - only in input mode */}
                     {(mode === 'input' || mode === 'graphCreate') && (
                         <div className="control-panel__section">
@@ -226,10 +334,6 @@ function ControlPanel({
                                 // Exclusion props
                                 isDrawingExclusion={isDrawingExclusion}
                                 setIsDrawingExclusion={setIsDrawingExclusion}
-                                showGraphBoundary={showGraphBoundary}
-                                setShowGraphBoundary={setShowGraphBoundary}
-                                showGraphNodes={showGraphNodes}
-                                setShowGraphNodes={setShowGraphNodes}
                             />
                         </div>
                     )}
@@ -445,8 +549,8 @@ function ControlPanel({
                     )}
 
                     {/* Drawing Tools - Only show in display mode */}
-                    {mode === 'display' && (
-                        <div className="control-panel__section">
+                    {sectionVisible.tools && (
+                        <ReorderableSection {...sectionProps('tools')}>
                             <div className="control-panel__section-title">Tools</div>
                             <div className="control-panel__tools">
                                 <button
@@ -492,107 +596,85 @@ function ControlPanel({
                                     <Undo2 size={18} />
                                 </button>
                             </div>
-                            {activeTool && (
-                                <p className="tool-hint">
-                                    Click a road to drop a pin.
-                                    {activeTool === 'circle' && ' Drag to set a radius.'}
-                                    {activeTool === 'box' && ' Drag to draw a rectangle.'}
-                                    {activeTool === 'freeform' && ' Drag to draw a shape.'}
-                                    {' Double-click a pin to remove it.'}
-                                    {isExcludeMode ? ' Exclude is on.' : ' Hold Shift to exclude.'}
-                                </p>
-                            )}
-                        </div>
+                            <p className="tool-hint">
+                                {!activeTool && 'Drag to move the map. '}
+                                Click a road to drop a pin.
+                                {activeTool === 'circle' && ' Drag to set a radius.'}
+                                {activeTool === 'box' && ' Drag to draw a rectangle.'}
+                                {activeTool === 'freeform' && ' Drag to draw a shape.'}
+                                {' Double-click a pin to remove it.'}
+                                {isExcludeMode ? ' Exclude is on.' : ' Hold Shift to exclude.'}
+                            </p>
+                        </ReorderableSection>
                     )}
 
-                    {/* Path info - only show when we have a path */}
+                    <ReorderableSection {...sectionProps('view')}>
+                        <SectionToggle
+                            title="View Options"
+                            collapsed={collapsed.view}
+                            onToggle={() => toggleSection('view')}
+                        />
+                        {!collapsed.view && (
+                            <div className="view-options">
+                                <ToggleRow
+                                    label="Show Direction Arrows"
+                                    checked={showArrows}
+                                    onChange={setShowArrows}
+                                />
+                                <ToggleRow
+                                    label="Show Graph Boundary"
+                                    checked={showGraphBoundary}
+                                    onChange={setShowGraphBoundary}
+                                />
+                                <ToggleRow
+                                    label="Show Path Preview"
+                                    checked={showPathPreview}
+                                    onChange={setShowPathPreview}
+                                />
+                                <SliderRow
+                                    label="Preview Opacity"
+                                    valueLabel={`${Math.round(pathPreviewOpacity * 100)}%`}
+                                >
+                                    <input
+                                        type="range"
+                                        min="0.1"
+                                        max="1"
+                                        step="0.1"
+                                        value={pathPreviewOpacity}
+                                        onChange={(e) => setPathPreviewOpacity(parseFloat(e.target.value))}
+                                        aria-label="Preview opacity"
+                                    />
+                                </SliderRow>
+                                <ToggleRow
+                                    label="Show Graph Nodes"
+                                    checked={showGraphNodes}
+                                    onChange={setShowGraphNodes}
+                                />
+                                <ToggleRow
+                                    label="Show Centroids"
+                                    checked={showCentroids}
+                                    onChange={setShowCentroids}
+                                />
+                                <SliderRow
+                                    label="Theme Color"
+                                    valueLabel={`${primaryColor}°`}
+                                >
+                                    <input
+                                        type="range"
+                                        min="0"
+                                        max="360"
+                                        value={primaryColor}
+                                        onChange={(e) => setPrimaryColor(e.target.value)}
+                                        aria-label="Theme color"
+                                    />
+                                </SliderRow>
+                            </div>
+                        )}
+                    </ReorderableSection>
+
                     {hasActivePathSet && (
                         <>
-                            <div className="control-panel__section">
-                            <SectionToggle
-                                title="View Options"
-                                collapsed={collapsed.view}
-                                onToggle={() => toggleSection('view')}
-                            />
-                            {!collapsed.view && (
-                            <div className="settings-grid">
-                                    {showPathPreview && (
-                                        <label className="setting-item full-width" style={{ marginTop: '8px' }}>
-                                            <span style={{ fontSize: '12px', color: 'var(--color-text-muted)' }}>Preview Opacity: {Math.round(pathPreviewOpacity * 100)}%</span>
-                                            <input
-                                                type="range"
-                                                min="0.1"
-                                                max="1.0"
-                                                step="0.1"
-                                                value={pathPreviewOpacity}
-                                                onChange={e => setPathPreviewOpacity(parseFloat(e.target.value))}
-                                                style={{ width: '100%' }}
-                                            />
-                                        </label>
-                                    )}
-                                    <label className="checkbox-item" style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px' }}>
-                                        <input
-                                            type="checkbox"
-                                            checked={showArrows}
-                                            onChange={e => setShowArrows(e.target.checked)}
-                                        />
-                                        Show Direction Arrows
-                                    </label>
-                                    <div className="control-panel__setting-row">
-                                        <label className="control-panel__setting-label">
-                                            Show Graph Boundary
-                                        </label>
-                                        <label className="switch">
-                                            <input
-                                                type="checkbox"
-                                                checked={showGraphBoundary}
-                                                onChange={(e) => setShowGraphBoundary(e.target.checked)}
-                                            />
-                                            <span className="slider round"></span>
-                                        </label>
-                                    </div>
-
-                                    <div className="control-panel__setting-row">
-                                        <label className="control-panel__setting-label">
-                                            Show Path Preview
-                                        </label>
-                                        <label className="switch">
-                                            <input
-                                                type="checkbox"
-                                                checked={showPathPreview}
-                                                onChange={(e) => setShowPathPreview(e.target.checked)}
-                                            />
-                                            <span className="slider round"></span>
-                                        </label>
-                                    </div>
-
-                                    <div className="control-panel__setting-row">
-                                        <label className="control-panel__setting-label">
-                                            Show Graph Nodes
-                                        </label>
-                                        <label className="switch">
-                                            <input
-                                                type="checkbox"
-                                                checked={showGraphNodes}
-                                                onChange={(e) => setShowGraphNodes(e.target.checked)}
-                                            />
-                                            <span className="slider round"></span>
-                                        </label>
-                                    </div>
-                                    <label className="checkbox-item" style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', marginTop: '4px' }}>
-                                        <input
-                                            type="checkbox"
-                                            checked={showCentroids}
-                                            onChange={e => setShowCentroids(e.target.checked)}
-                                        />
-                                        Show Centroids
-                                    </label>
-
-                                </div>
-                            )}
-                            </div>
-
-                            <div className="control-panel__section">
+                            <ReorderableSection {...sectionProps('sort')}>
                                 <div className="control-panel__section-title">Sort By</div>
                                 <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                                     <select
@@ -605,6 +687,7 @@ function ControlPanel({
                                         <option value="total_miles">Distance</option>
                                         <option value="difficulty">Difficulty</option>
                                         <option value="total_climb_ft">Total Climbing Distance</option>
+                                        <option value="climb_rate">Climb Rate</option>
                                         <option value="loop_ratio">Loop Path Percentage</option>
                                         <option value="turns">Number of Turns</option>
                                         <option value="discomfort">Discomfort</option>
@@ -620,61 +703,176 @@ function ControlPanel({
                                         <ArrowUpDown size={16} />
                                     </button>
                                 </div>
-                            </div>
+                            </ReorderableSection>
 
-                            <div className="control-panel__section">
-                            <SectionToggle
-                                title="Filter by Distance"
-                                collapsed={collapsed.distance}
-                                onToggle={() => toggleSection('distance')}
-                            />
-                            {!collapsed.distance && (
-                                <DistanceFilter
-                                    distanceRange={distanceRange}
-                                    setDistanceRange={setDistanceRange}
-                                />
-                            )}
-                            </div>
-
-                            <div className="control-panel__section">
-                            <SectionToggle
-                                title="Filter by Difficulty"
-                                collapsed={collapsed.difficulty}
-                                onToggle={() => toggleSection('difficulty')}
-                            />
-                            {!collapsed.difficulty && (
-                                <DifficultyFilter
-                                    difficultyRange={difficultyRange}
-                                    setDifficultyRange={setDifficultyRange}
-                                />
-                            )}
-                            </div>
+                            <ReorderableSection {...sectionProps('filters')}>
+                                <div className="filters-head">
+                                    <SectionToggle
+                                        title="Filters"
+                                        collapsed={collapsed.filters}
+                                        onToggle={() => toggleSection('filters')}
+                                    />
+                                    <button
+                                        type="button"
+                                        className="filters-add"
+                                        onClick={() => {
+                                            if (collapsed.filters) {
+                                                toggleSection('filters');
+                                                setFilterPickerOpen(true);
+                                                return;
+                                            }
+                                            setFilterPickerOpen((open) => !open);
+                                        }}
+                                        disabled={availableFilters.length === 0}
+                                        title={availableFilters.length === 0 ? 'Every filter is already added' : 'Add a filter'}
+                                        aria-label="Add a filter"
+                                        aria-expanded={filterPickerOpen}
+                                    >
+                                        <Plus size={16} />
+                                    </button>
+                                </div>
+                                {!collapsed.filters && filterPickerOpen && availableFilters.length > 0 && (
+                                    <select
+                                        className="control-panel__select filters-picker"
+                                        autoFocus
+                                        value=""
+                                        onChange={(e) => {
+                                            if (!e.target.value) return;
+                                            addRouteFilter(e.target.value);
+                                            setFilterPickerOpen(false);
+                                        }}
+                                        aria-label="Choose a filter"
+                                    >
+                                        <option value="">Choose a filter</option>
+                                        {availableFilters.map((metric) => (
+                                            <option key={metric.key} value={metric.key}>{metric.label}</option>
+                                        ))}
+                                    </select>
+                                )}
+                                {!collapsed.filters && (routeFilters || []).map((filter) => {
+                                    const metric = getFilterMetric(filter.key);
+                                    if (!metric) return null;
+                                    return (
+                                        <div key={filter.key} className="filter-block">
+                                            <div className="filter-block__head">
+                                                <span>{metric.label}</span>
+                                                <button
+                                                    type="button"
+                                                    className="filter-block__delete"
+                                                    onClick={() => removeRouteFilter(filter.key)}
+                                                    title={`Remove ${metric.label} filter`}
+                                                    aria-label={`Remove ${metric.label} filter`}
+                                                >
+                                                    <Trash2 size={14} />
+                                                </button>
+                                            </div>
+                                            <RangeFilter
+                                                metric={metric}
+                                                bounds={filterBounds?.[filter.key]}
+                                                range={filter.range}
+                                                onChange={(range) => setFilterRange(filter.key, range)}
+                                            />
+                                        </div>
+                                    );
+                                })}
+                            </ReorderableSection>
                         </>
                     )}
 
-                    {/* Path info - only show when we have a path */}
-                    {currentPath ? (
-                        <div className="control-panel__section">
+                    {sectionVisible.details && (
+                        <ReorderableSection {...sectionProps('details')}>
                             <div className="control-panel__section-title">Path Details</div>
-                            <PathInfo path={currentPath} />
-                        </div>
-                    ) : hasActivePathSet ? (
-                        <div className="control-panel__empty">
-                            <div className="control-panel__empty-text">
-                                No paths match your filters
-                            </div>
-                        </div>
-                    ) : null}
+                            {currentPath ? (
+                                <PathInfo path={currentPath} />
+                            ) : (
+                                <div className="control-panel__empty">
+                                    <div className="control-panel__empty-text">
+                                        No paths match your filters
+                                    </div>
+                                </div>
+                            )}
+                        </ReorderableSection>
+                    )}
 
-                    {/* Theme Settings */}
-                    <ThemeSettings
-                        primaryColor={primaryColor}
-                        setPrimaryColor={setPrimaryColor}
-                        collapsed={collapsed.appearance}
-                        onToggle={() => toggleSection('appearance')}
-                    />
                 </div>
             )}
+        </div>
+    );
+}
+
+function ReorderableSection({
+    label,
+    order,
+    armed,
+    dragging,
+    dropSide,
+    onArm,
+    onDisarm,
+    onNudge,
+    onDragStart,
+    onDragOver,
+    onDragEnd,
+    children,
+}) {
+    const className = [
+        'control-panel__section',
+        'control-panel__section--movable',
+        dragging ? 'is-dragging' : '',
+        dropSide ? `is-drop-${dropSide}` : '',
+    ].filter(Boolean).join(' ');
+
+    return (
+        <div
+            className={className}
+            style={{ order }}
+            draggable={armed}
+            onDragStart={onDragStart}
+            onDragOver={onDragOver}
+            onDragEnd={onDragEnd}
+        >
+            <button
+                type="button"
+                className="section-grip"
+                onPointerDown={onArm}
+                onPointerUp={onDisarm}
+                onKeyDown={(e) => {
+                    if (e.key === 'ArrowUp') { e.preventDefault(); onNudge(-1); }
+                    if (e.key === 'ArrowDown') { e.preventDefault(); onNudge(1); }
+                }}
+                title={`Drag to move ${label}. Arrow keys also move it.`}
+                aria-label={`Move ${label}`}
+            >
+                <GripVertical size={12} />
+            </button>
+            {children}
+        </div>
+    );
+}
+
+function ToggleRow({ label, checked, onChange }) {
+    return (
+        <label className="view-option">
+            <span>{label}</span>
+            <span className="view-option__switch">
+                <input
+                    type="checkbox"
+                    checked={!!checked}
+                    onChange={(e) => onChange(e.target.checked)}
+                />
+                <span />
+            </span>
+        </label>
+    );
+}
+
+function SliderRow({ label, valueLabel, children }) {
+    return (
+        <div className="view-option view-option--stack">
+            <div className="view-option__meta">
+                <span>{label}</span>
+                <span>{valueLabel}</span>
+            </div>
+            {children}
         </div>
     );
 }

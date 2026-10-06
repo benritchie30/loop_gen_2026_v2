@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { filterByDistance, filterByDifficulty, sortPaths } from '../utils/pathFiltering';
+import { FILTER_METRICS, OPEN_RANGE, filterByMetrics, metricBounds, sanitizeRouteFilters, sortPaths } from '../utils/pathFiltering';
 import { filterByRouteSelections } from '../utils/routeSelections';
 
 /**
@@ -11,13 +11,22 @@ export function usePathSets() {
     const [pathSets, setPathSets] = useState({});
     const [activePathSetId, setActivePathSetId] = useState(null);
     const [selectedPathId, setSelectedPathId] = useState(null);
-    const [distanceRange, setDistanceRange] = useState(() => {
-        const saved = localStorage.getItem('distanceRange');
-        return saved ? JSON.parse(saved) : [0, 200];
-    });
-    const [difficultyRange, setDifficultyRange] = useState(() => {
-        const saved = localStorage.getItem('difficultyRange');
-        return saved ? JSON.parse(saved) : [1, 10];
+    const [routeFilters, setRouteFilters] = useState(() => {
+        try {
+            const saved = localStorage.getItem('routeFilterLimits');
+            if (saved) {
+                const parsed = sanitizeRouteFilters(JSON.parse(saved));
+                if (parsed.length > 0) return parsed;
+            }
+            // Older saves used fixed slider ends, so keep only which filters were open.
+            const legacy = sanitizeRouteFilters(JSON.parse(localStorage.getItem('routeFilters') || '[]'));
+            if (legacy.length > 0) {
+                return legacy.map((filter) => ({ key: filter.key, range: OPEN_RANGE }));
+            }
+        } catch {
+            // Fall through to the distance default.
+        }
+        return [{ key: 'total_miles', range: OPEN_RANGE }];
     });
     const [sortBy, setSortBy] = useState(() => {
         const saved = localStorage.getItem('sortBy');
@@ -29,15 +38,31 @@ export function usePathSets() {
     const sortByRef = useRef(sortBy);
     sortByRef.current = sortBy;
 
-    // Save distanceRange to localStorage
     useEffect(() => {
-        localStorage.setItem('distanceRange', JSON.stringify(distanceRange));
-    }, [distanceRange]);
+        localStorage.setItem('routeFilterLimits', JSON.stringify(routeFilters));
+    }, [routeFilters]);
 
-    // Save difficultyRange to localStorage
-    useEffect(() => {
-        localStorage.setItem('difficultyRange', JSON.stringify(difficultyRange));
-    }, [difficultyRange]);
+    const setFilterRange = useCallback((key, range) => {
+        setRouteFilters((prev) => prev.map((filter) => (
+            filter.key === key ? { ...filter, range } : filter
+        )));
+    }, []);
+
+    const addRouteFilter = useCallback((key) => {
+        setRouteFilters((prev) => {
+            if (prev.some((filter) => filter.key === key)) return prev;
+            const next = sanitizeRouteFilters([...prev, { key, range: OPEN_RANGE }]);
+            return next.length === prev.length ? prev : next;
+        });
+    }, []);
+
+    const removeRouteFilter = useCallback((key) => {
+        setRouteFilters((prev) => {
+            const next = prev.filter((filter) => filter.key !== key);
+            if (next.length > 0) return next;
+            return [{ key: 'total_miles', range: OPEN_RANGE }];
+        });
+    }, []);
 
     // Save sortBy to localStorage
     useEffect(() => {
@@ -152,16 +177,23 @@ export function usePathSets() {
         return activePathSetId ? pathSets[activePathSetId] : null;
     }, [pathSets, activePathSetId]);
 
+    const filterBounds = useMemo(() => {
+        const bounds = {};
+        FILTER_METRICS.forEach((metric) => {
+            bounds[metric.key] = metricBounds(activePathSet?.paths, metric);
+        });
+        return bounds;
+    }, [activePathSet]);
+
     // Get filtered paths based on distance, drawn selections, and dropped pins
     const filteredPaths = useMemo(() => {
         if (!activePathSet?.paths?.length) return [];
 
         let paths = activePathSet.paths;
-        paths = filterByDistance(paths, distanceRange[0], distanceRange[1]);
-        paths = filterByDifficulty(paths, difficultyRange[0], difficultyRange[1]);
+        paths = filterByMetrics(paths, routeFilters);
         paths = filterByRouteSelections(paths, drawnSelections);
         return sortPaths(paths, sortBy, sortAscending);
-    }, [activePathSet, distanceRange, difficultyRange, drawnSelections, sortBy, sortAscending]);
+    }, [activePathSet, routeFilters, drawnSelections, sortBy, sortAscending]);
 
 
 
@@ -321,8 +353,8 @@ export function usePathSets() {
         currentPathIndex,
         currentPath,
         filteredPaths,
-        distanceRange,
-        difficultyRange,
+        routeFilters,
+        filterBounds,
         sortBy,
         sortAscending,
         drawnSelections,
@@ -337,8 +369,9 @@ export function usePathSets() {
         clearDrawnSelections,
         undoLastSelection,
         removeSelection,
-        setDistanceRange,
-        setDifficultyRange,
+        setFilterRange,
+        addRouteFilter,
+        removeRouteFilter,
         setSortBy: handleSetSortBy,
         setSortAscending: handleSetSortAscending,
         nextPath,

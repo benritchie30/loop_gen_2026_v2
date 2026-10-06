@@ -60,3 +60,49 @@ discomfort algo seems to work well. Weights might need tuning. Tertiary roads in
 maybe tertiary shouldn't be zero discomfort cost. But tertiary in rural areas might not get much traffick and could 
 be desired over residential. 
 Advanced input mode where I can input the weights for different road types. ask agent to give me combinations to test out
+  
+
+discomfort no turns finds paths that keep off road well but they miander a lot and discomfort barely
+goes past 0 so barely hits tertiary roads
+
+distance only explores more area but doesn't do anything about pleasant roads
+
+discomfort and turns has balance but doesn't explore less direct routes explores less area
+
+
+I want an algorithm that gives the user a variety of routes they would want to try
+so they need to explore many areas to give variety, be easy to follow, avoid unpleant roads but not too much,
+
+In a dense graph we still arent exploring far enough because it is getting variety of distances but all Just
+different length loops in the same area. 
+add metric that rewards visiting new areas
+
+At longer lengths it will start to take trunks and nondesirable roads over 
+better paths that take more turns. I still want to be able to make small crossings
+but how can i assure i won't take trunk roads long distances
+some trunk is okay some isn't like 105 bypass
+
+sometimes out takes long path where the loop starts right by the path start point
+I don't think people would like to take these loops
+
+Displaying paths is my current challenge
+click on map like pin drop. gets closest and then sorts them by distance
+
+
+Add search button where you enter location or address and it goes there and drops a pin at location
+
+See if agent can come up with ideas to improve algorithm. I want to maximize area explored preserving
+good routes
+
+rework difficulty to be more sensitive. A lot of the boone paths are all 10/10
+
+Add ability to save/start a path I want to save
+Then the toggle to only display stared paths
+on input page I can go to view saved paths
+they might be from different genearations from different locations display them all.
+I can click on pin to choose routes from one generation
+Add name/label to started routes
+
+back button to return to input page. Warns user they will lose their generation.
+or keep generatons if we don't refresh and I can go between generations?
+would this be too much on the front end if i have hundreds of paths saved there?

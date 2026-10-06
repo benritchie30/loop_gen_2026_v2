@@ -116,26 +116,19 @@ function MapView({
             }
             return 'Drag the markers to set graph bounds, then press Enter';
         }
-        if (!activeTool) return 'Click a road to drop a pin. Drag to pan. Shift excludes.';
-        if (activeTool === 'circle') return 'Click a road for a pin, or drag the radius. Shift excludes.';
-        if (activeTool === 'box') return 'Click a road for a pin, or drag a rectangle. Shift excludes.';
-        if (activeTool === 'freeform') return 'Click a road for a pin, or drag a shape. Shift excludes.';
         return null;
     };
 
     const hintText = getHintText();
 
-    const getModeLabel = () => {
-        if (mode === 'display') {
-            if (!activeTool) return 'PAN';
-            if (activeTool === 'circle') return 'CIRCLE';
-            if (activeTool === 'box') return 'BOX';
-            if (activeTool === 'freeform') return 'FREEFORM';
-            return 'DISPLAY';
-        }
-        if (mode === 'graphCreate') return 'GRAPH CREATE';
-        return mode;
-    };
+    const [showStatus, setShowStatus] = useState(true);
+    useEffect(() => {
+        setShowStatus(true);
+        if (wsStatus !== 'connected') return;
+        const timer = setTimeout(() => setShowStatus(false), 5000);
+        return () => clearTimeout(timer);
+    }, [wsStatus]);
+    const isConnected = wsStatus === 'connected';
 
     // Get boundary for active graph preview
     // Show if:
@@ -161,16 +154,12 @@ function MapView({
     return (
         <div className="map-view">
             {/* Connection status */}
-            <div className="map-view__status">
-                <div className={`map-view__status-dot map-view__status-dot--${wsStatus}`} />
-                <span>{wsStatus === 'connected' ? 'Connected' : wsStatus === 'connecting' ? 'Connecting...' : 'Disconnected'}</span>
-            </div>
-
-            {/* Mode indicator */}
-            <div className={`map-view__mode map-view__mode--${mode}`}>
-                {getModeLabel()}
-                {isExcludeMode && <span style={{ color: '#ff4444', marginLeft: '8px' }}>(EXCLUDE)</span>}
-            </div>
+            {showStatus && (
+                <div className="map-view__status">
+                    <div className={`map-view__status-dot map-view__status-dot--${isConnected ? 'connected' : 'disconnected'}`} />
+                    <span>{isConnected ? 'Server Connected' : 'Server Disconnected'}</span>
+                </div>
+            )}
 
             {isGenerating && (
                 <div className="map-view__generating">

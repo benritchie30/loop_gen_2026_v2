@@ -13,8 +13,8 @@
 /* Status indicator */
 .map-view__status {
     position: absolute;
-    top: var(--space-md);
-    left: var(--space-md);
+    top: 10px;
+    left: 56px;
     z-index: 1000;
     display: flex;
     align-items: center;
@@ -35,7 +35,11 @@
 }
 
 .map-view__status-dot--connected {
-    background: var(--color-secondary);
+    background: #2e7d32;
+}
+
+.map-view__status-dot--disconnected {
+    background: #d32f2f;
 }
 
 .map-view__status-dot--connecting {
@@ -55,39 +59,10 @@
     }
 }
 
-/* Mode indicator */
-.map-view__mode {
-    position: absolute;
-    top: var(--space-md);
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 1000;
-    padding: var(--space-sm) var(--space-md);
-    background: var(--color-bg);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-sm);
-    font-size: var(--font-size-sm);
-    font-weight: var(--font-weight-medium);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.map-view__mode--input {
-    color: var(--color-primary);
-}
-
-.map-view__mode--display {
-    color: var(--color-secondary);
-}
-
-.map-view__mode--drawing {
-    color: var(--color-accent);
-}
-
 /* Generation in progress */
 .map-view__generating {
     position: absolute;
-    top: calc(var(--space-md) + 44px);
+    top: var(--space-md);
     left: 50%;
     transform: translateX(-50%);
     z-index: 1000;
@@ -138,11 +113,6 @@
 
 .map-view__hint--visible {
     opacity: 1;
-}
-
-/* Graph Create mode */
-.map-view__mode--graphCreate {
-    color: var(--color-accent);
 }
 
 /* Bounds selector marker handles */

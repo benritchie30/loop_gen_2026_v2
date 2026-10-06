@@ -36,6 +36,43 @@ function loadLastGraphShape() {
   }
 }
 
+const VIEW_OPTION_DEFAULTS = {
+  showArrows: true,
+  showCentroids: false,
+  primaryColor: '215',
+  showPathPreview: true,
+  pathPreviewOpacity: 0.5,
+  showGraphBoundary: false,
+  showGraphNodes: false,
+};
+
+function readViewOptions() {
+  let saved = {};
+  try {
+    saved = JSON.parse(localStorage.getItem('viewOptions') || '{}') || {};
+  } catch {
+    saved = {};
+  }
+  const opacity = Number(saved.pathPreviewOpacity);
+  const hue = Number(saved.primaryColor ?? localStorage.getItem('primaryColor') ?? VIEW_OPTION_DEFAULTS.primaryColor);
+  const flag = (key) => (
+    typeof saved[key] === 'boolean' ? saved[key] : VIEW_OPTION_DEFAULTS[key]
+  );
+  return {
+    showArrows: flag('showArrows'),
+    showCentroids: flag('showCentroids'),
+    showPathPreview: flag('showPathPreview'),
+    showGraphBoundary: flag('showGraphBoundary'),
+    showGraphNodes: flag('showGraphNodes'),
+    pathPreviewOpacity: Number.isFinite(opacity)
+      ? Math.min(1, Math.max(0.1, opacity))
+      : VIEW_OPTION_DEFAULTS.pathPreviewOpacity,
+    primaryColor: Number.isFinite(hue)
+      ? String(Math.min(360, Math.max(0, Math.round(hue))))
+      : VIEW_OPTION_DEFAULTS.primaryColor,
+  };
+}
+
 function saveLastGraphShape(bounds) {
   if (!bounds?.type) return;
   localStorage.setItem(LAST_GRAPH_SHAPE_KEY, JSON.stringify(bounds));
@@ -77,8 +114,8 @@ function App() {
     currentPath,
     currentPathIndex,
     filteredPaths,
-    distanceRange,
-    difficultyRange,
+    routeFilters,
+    filterBounds,
     sortBy,
     sortAscending,
     drawnSelections,
@@ -87,8 +124,9 @@ function App() {
     completePathSet,
     selectPathSet,
     addDrawnSelection,
-    setDistanceRange,
-    setDifficultyRange,
+    setFilterRange,
+    addRouteFilter,
+    removeRouteFilter,
     setSortBy,
     setSortAscending,
     nextPath,
@@ -116,14 +154,26 @@ function App() {
   const [hoveredPoint, setHoveredPoint] = useState(null);
   const draftingRef = useRef(null);
 
-  // Display Options
-  const [showArrows, setShowArrows] = useState(true);
-  const [showCentroids, setShowCentroids] = useState(false);
-  const [primaryColor, setPrimaryColor] = useState(() => localStorage.getItem('primaryColor') || '215'); // Default hue (Blue)
-  const [showPathPreview, setShowPathPreview] = useState(true);
-  const [pathPreviewOpacity, setPathPreviewOpacity] = useState(0.5);
-  const [showGraphBoundary, setShowGraphBoundary] = useState(false);
-  const [showGraphNodes, setShowGraphNodes] = useState(false);
+  const [viewOptions, setViewOptions] = useState(readViewOptions);
+  const {
+    showArrows,
+    showCentroids,
+    primaryColor,
+    showPathPreview,
+    pathPreviewOpacity,
+    showGraphBoundary,
+    showGraphNodes,
+  } = viewOptions;
+  const setViewOption = (key, value) => {
+    setViewOptions((prev) => ({ ...prev, [key]: value }));
+  };
+  const setShowArrows = (value) => setViewOption('showArrows', value);
+  const setShowCentroids = (value) => setViewOption('showCentroids', value);
+  const setPrimaryColor = (value) => setViewOption('primaryColor', String(value));
+  const setShowPathPreview = (value) => setViewOption('showPathPreview', value);
+  const setPathPreviewOpacity = (value) => setViewOption('pathPreviewOpacity', value);
+  const setShowGraphBoundary = (value) => setViewOption('showGraphBoundary', value);
+  const setShowGraphNodes = (value) => setViewOption('showGraphNodes', value);
   const [graphNodes, setGraphNodes] = useState([]);
   const [exclusionZones, setExclusionZones] = useState([]);
   const [isDrawingExclusion, setIsDrawingExclusion] = useState(false);
@@ -373,7 +423,7 @@ function App() {
     const handleKeyDown = (e) => {
       const tag = e.target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) {
-        return;
+        if (!(e.key === 'Enter' && tag === 'INPUT')) return;
       }
 
       // Input Mode: Enter to start generation
@@ -489,10 +539,10 @@ function App() {
     // So we just don't do anything here. The window shows if !isElevationMinimized and data exists.
   }, [currentPath]);
 
-  // Persist primary color setting
   useEffect(() => {
-    localStorage.setItem('primaryColor', primaryColor);
-  }, [primaryColor]);
+    localStorage.setItem('viewOptions', JSON.stringify(viewOptions));
+    localStorage.setItem('primaryColor', viewOptions.primaryColor);
+  }, [viewOptions]);
 
   // Fetch graph nodes when the toggle is turned on
   useEffect(() => {
@@ -563,10 +613,11 @@ function App() {
         currentPathIndex={currentPathIndex}
         filteredPathsCount={filteredPaths.length}
         totalPathsCount={activePathSet?.paths?.length || 0}
-        distanceRange={distanceRange}
-        setDistanceRange={setDistanceRange}
-        difficultyRange={difficultyRange}
-        setDifficultyRange={setDifficultyRange}
+        routeFilters={routeFilters}
+        filterBounds={filterBounds}
+        setFilterRange={setFilterRange}
+        addRouteFilter={addRouteFilter}
+        removeRouteFilter={removeRouteFilter}
         sortBy={sortBy}
         setSortBy={setSortBy}
         sortAscending={sortAscending}
