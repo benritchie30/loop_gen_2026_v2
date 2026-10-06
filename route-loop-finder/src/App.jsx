@@ -206,6 +206,8 @@ function App() {
     { id: 'pleasant_capped', label: 'Pleasant roads (capped)' },
     { id: 'discomfort_capped', label: 'Pleasant, ignore turns (capped)' },
     { id: 'distance_capped', label: 'Distance only (capped)' },
+    { id: 'pleasant_explore', label: 'Pleasant + explore new areas (capped)' },
+    { id: 'tree_loops', label: 'Area sweep (best-route trees)' },
   ]);
 
   const generatingPathSetId = Object.keys(pathSets).find(id => !pathSets[id].isComplete) || null;
@@ -352,6 +354,9 @@ function App() {
       deduplication: 'centroid',
       min_dist_m: 50,
       cap_k: 3,
+      explore_weight: null,
+      detour_weight: null,
+      reuse_weight: null,
       debug_snapshots: false,
       snapshot_every: 25000,
       road_weights: { ...DEFAULT_ROAD_WEIGHTS },

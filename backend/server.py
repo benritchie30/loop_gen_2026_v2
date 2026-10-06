@@ -261,6 +261,14 @@ async def _run_generation(websocket, data, stop_event):
     min_dist_m = float(data.get("min_dist_m") or 50.0)
     cap_k = data.get("cap_k")
     cap_k = int(cap_k) if cap_k is not None else None
+    tuning = {}
+    for key in ("explore_weight", "detour_weight", "reuse_weight"):
+        try:
+            value = float(data.get(key))
+        except (TypeError, ValueError):
+            continue
+        if value >= 0:
+            tuning[key] = value
     debug_snapshots = bool(data.get("debug_snapshots", False))
     snapshot_every = int(data.get("snapshot_every") or 25000)
     graph_name = gm.get_active_name() or "graph"
@@ -295,6 +303,7 @@ async def _run_generation(websocket, data, stop_event):
         road_weights=road_weights,
         rural_scale=rural_scale,
         should_stop=stop_event.is_set,
+        **tuning,
     )
 
     try:

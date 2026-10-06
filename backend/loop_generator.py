@@ -8,6 +8,7 @@ from shapely.ops import linemerge
 import srtm
 from pyproj import Geod
 import functools
+import weakref
 from road_stress import CROSSING_CAP, CROSSING_MAX_M, annotate_edge_stress
 
 # Constants
@@ -83,8 +84,34 @@ def _calc_bearing(lat1_deg, lng1_deg, lat2_deg, lng2_deg):
 #         return _calc_bearing(G.nodes[u]['y'], G.nodes[u]['x'], G.nodes[v]['y'], G.nodes[v]['x'])
 #     return 0.0
 
+# Per-graph memo tables. Keyed weakly by graph so a switched-out graph frees
+# its entries, and kept off G.graph so they never get pickled.
+_BEARINGS: 'weakref.WeakKeyDictionary' = weakref.WeakKeyDictionary()
+_EDGE0: 'weakref.WeakKeyDictionary' = weakref.WeakKeyDictionary()
+_CENTROID_PARTS: 'weakref.WeakKeyDictionary' = weakref.WeakKeyDictionary()
+_ELEV_SAMPLES: 'weakref.WeakKeyDictionary' = weakref.WeakKeyDictionary()
+
+
+def _graph_memo(table, G):
+    memo = table.get(G)
+    if memo is None:
+        memo = {}
+        table[G] = memo
+    return memo
+
+
 def calculate_initial_bearing(G, u, v):
     """Calculates bearing from u to v using graph coordinates."""
+    memo = _graph_memo(_BEARINGS, G)
+    key = (u, v)
+    bearing = memo.get(key)
+    if bearing is None:
+        bearing = _chord_bearing(G, u, v)
+        memo[key] = bearing
+    return bearing
+
+
+def _chord_bearing(G, u, v):
     if 'x' in G.nodes[u] and 'y' in G.nodes[u] and 'x' in G.nodes[v] and 'y' in G.nodes[v]:
         # Simple bearing since edges are short
         lat1 = math.radians(G.nodes[u]['y'])
@@ -142,14 +169,9 @@ def _bearing_delta(b1, b2):
 
 def weight_function_turns_dist(G, u_node, v, current_turns, current_dist):
     """Calculates path weight considering turns (by bearing change) and distance."""
-    if not G.has_edge(u_node.id, v):
+    curr_edge = _edge_data(G, u_node.id, v)
+    if curr_edge is None:
         return float('inf'), float('inf')
-    try:
-        curr_edge = G[u_node.id][v][0]
-    except KeyError:
-        print("KeyError in weight_function_turns_dist")
-        print(u_node.id, v)
-        return current_turns, current_dist
 
     new_dist = current_dist + curr_edge.get('length', 0)
 
@@ -168,11 +190,27 @@ def weight_function_turns_dist(G, u_node, v, current_turns, current_dist):
 
 
 def _edge_data(G, u, v):
-    """First parallel edge from u to v, or None."""
+    """First parallel edge from u to v, else from v to u, else None.
+
+    The reverse stands in for a one-way edge a lollipop stem retraces; search
+    only asks for edges it got from G.neighbors. Memoizes the attribute dict
+    itself, so in-place stress updates still show.
+    """
+    memo = _graph_memo(_EDGE0, G)
+    key = (u, v)
     try:
-        return G[u][v][0]
-    except (KeyError, IndexError, TypeError):
-        return None
+        return memo[key]
+    except KeyError:
+        pass
+    data = None
+    for a, b in ((u, v), (v, u)):
+        try:
+            data = G[a][b][0]
+            break
+        except (KeyError, IndexError, TypeError):
+            continue
+    memo[key] = data
+    return data
 
 
 def pleasant_extend(G, prev_prev, prev, curr, nxt, turns, dist, discomfort):
@@ -284,13 +322,17 @@ def _oriented_edge_geom(G, u, v):
 
     Degree-2 merges write one geometry onto both directed edges. Sampling and
     GeoJSON must follow travel direction or the elevation hover walks backward.
+    A lollipop stem can retrace a one-way edge, so v→u's geometry stands in
+    when u→v is missing.
     """
     ux, uy = G.nodes[u]['x'], G.nodes[u]['y']
     vx, vy = G.nodes[v]['x'], G.nodes[v]['y']
     geom = None
-    if G.has_edge(u, v):
-        data = G[u][v][0] if G.is_multigraph() else G[u][v]
-        geom = data.get('geometry')
+    for a, b in ((u, v), (v, u)):
+        if G.has_edge(a, b):
+            data = G[a][b][0] if G.is_multigraph() else G[a][b]
+            geom = data.get('geometry')
+            break
     if geom is None or geom.is_empty:
         return shapely.geometry.LineString([(ux, uy), (vx, vy)])
     if geom.geom_type == 'MultiLineString':
@@ -317,7 +359,7 @@ def _sample_path_geometry(G, path, sample_interval_m=50):
         return
 
     for u, v in zip(path[:-1], path[1:]):
-        if not G.has_edge(u, v):
+        if not (G.has_edge(u, v) or G.has_edge(v, u)):
             continue
         geom = _oriented_edge_geom(G, u, v)
 
@@ -356,29 +398,59 @@ def _sample_path_geometry(G, path, sample_interval_m=50):
             
         cumulative_m += edge_length_m
 
-def _calculate_path_centroid(G: nx.MultiDiGraph, path_nodes: List[int]) -> Optional[Tuple[float, float]]:
-    """Calculates centroid (avg lat, avg lng) using uniform geometry sampling."""
-    if not path_nodes:
-        return None
-        
-    sum_lat = 0.0
-    sum_lng = 0.0
+def _edge_centroid_parts(G, u, v):
+    """(sum_lat, sum_lng, count, first_lat, first_lng) of u→v's 50 m samples.
+
+    None when the edge is missing or under 1 m, which path sampling skips.
+    """
+    memo = _graph_memo(_CENTROID_PARTS, G)
+    key = (u, v)
+    if key in memo:
+        return memo[key]
+    parts = None
+    sum_lat = sum_lng = 0.0
     count = 0
-    
-    # Use the same sampling as elevation profile for consistency
-    last_dist_m = -1000.0
-    for dist_m, lat, lng, _ in _sample_path_geometry(G, path_nodes, sample_interval_m=50):
-        if dist_m < last_dist_m + 1.0:
-            continue
-        last_dist_m = dist_m
-        
+    first = None
+    for _d, lat, lng, _b, _e in _edge_elevation_samples(G, u, v, 50):
+        if first is None:
+            first = (lat, lng)
         sum_lat += lat
         sum_lng += lng
         count += 1
-            
+    if count:
+        parts = (sum_lat, sum_lng, count, first[0], first[1])
+    memo[key] = parts
+    return parts
+
+
+def _calculate_path_centroid(G: nx.MultiDiGraph, path_nodes: List[int]) -> Optional[Tuple[float, float]]:
+    """Centroid (avg lat, avg lng) of the path's 50 m geometry samples.
+
+    Matches sampling the whole path: each edge after the first drops its
+    first sample, which sits on the previous edge's last one.
+    """
+    if not path_nodes:
+        return None
+
+    sum_lat = 0.0
+    sum_lng = 0.0
+    count = 0
+    for u, v in zip(path_nodes[:-1], path_nodes[1:]):
+        parts = _edge_centroid_parts(G, u, v)
+        if parts is None:
+            continue
+        e_lat, e_lng, e_n, f_lat, f_lng = parts
+        sum_lat += e_lat
+        sum_lng += e_lng
+        count += e_n
+        if count > e_n:
+            sum_lat -= f_lat
+            sum_lng -= f_lng
+            count -= 1
+
     if count == 0:
         return None
-        
+
     return (sum_lat / count, sum_lng / count)
 
 def _is_centroid_too_close(
@@ -404,9 +476,35 @@ def _is_centroid_too_close(
             
     return False
 
+def _edge_elevation_samples(G, u, v, sample_interval_m):
+    """[(dist_along_edge_m, lat, lng, bearing, elev_m)] for u→v, memoized."""
+    memo = _graph_memo(_ELEV_SAMPLES, G)
+    key = (u, v, sample_interval_m)
+    samples = memo.get(key)
+    if samples is None:
+        elev_data = _get_srtm()
+        samples = [
+            (d, lat, lng, bearing, elev_data.get_elevation(lat, lng))
+            for d, lat, lng, bearing in _sample_path_geometry(G, [u, v], sample_interval_m)
+        ]
+        memo[key] = samples
+    return samples
+
+
+def _path_elevation_samples(G, path, sample_interval_m):
+    """Same stream as sampling the whole path, built from per-edge memos."""
+    cumulative_m = 0.0
+    for u, v in zip(path[:-1], path[1:]):
+        samples = _edge_elevation_samples(G, u, v, sample_interval_m)
+        if not samples:
+            continue
+        for d, lat, lng, bearing, elev_m in samples:
+            yield cumulative_m + d, lat, lng, bearing, elev_m
+        cumulative_m += samples[-1][0]
+
+
 def compute_elevation_profile(G, path, sample_interval_m=50):
     """Samples SRTM elevation along path. Uses _sample_path_geometry."""
-    elev_data = _get_srtm()
     profile = []
     
     total_climb = 0.0
@@ -414,13 +512,12 @@ def compute_elevation_profile(G, path, sample_interval_m=50):
     prev_elev = None
     last_dist_m = -1000.0
 
-    for dist_m, lat, lng, bearing in _sample_path_geometry(G, path, sample_interval_m):
+    for dist_m, lat, lng, bearing, elev_m in _path_elevation_samples(G, path, sample_interval_m):
         # Filter duplicates (e.g. edge boundaries)
         if dist_m < last_dist_m + 1.0: 
              continue
         last_dist_m = dist_m
 
-        elev_m = elev_data.get_elevation(lat, lng)
         if elev_m is None: continue
         elev_ft = elev_m * FEET_PER_METER
         
@@ -493,7 +590,7 @@ def path_to_geojson(
         
     coords = []
     for u, v in zip(path[:-1], path[1:]):
-        if not G.has_edge(u, v):
+        if not (G.has_edge(u, v) or G.has_edge(v, u)):
             continue
         part = list(_oriented_edge_geom(G, u, v).coords)
         if not part:
@@ -560,9 +657,24 @@ ALGORITHMS: Dict[str, Dict[str, Any]] = {
         'node_bucket_cap': 3,
         'order': 'distance',
     },
+    'pleasant_explore': {
+        'label': 'Pleasant + explore new areas (capped)',
+        'prune_self_cross': True,
+        'astar_bound': True,
+        'node_bucket_cap': 3,
+        'order': 'pleasant',
+        'explore': True,
+    },
+    'tree_loops': {
+        'label': 'Area sweep (best-route trees)',
+        'order': 'tree',
+    },
 }
 
 BUCKET_M = 0.5 / MILES_PER_METER  # 0.5 miles in meters
+EXPLORE_CELL_M = 400.0
+EXPLORE_WEIGHT = 1.0  # turn-equivalents per covering loop / per doubling of expansions
+EXPLORE_POP_SCALE = 64.0
 LEGACY_ALGORITHM_ALIASES = {'scenic': 'turns', 'direct': 'turns', 'turn': 'turns'}
 MAX_ITERS = 1000000  # overridable for tests
 PRINT_EVERY = 10000
@@ -603,6 +715,8 @@ def find_paths_turns_dist(
     road_weights: Optional[Dict[str, float]] = None,
     rural_scale: bool = True,
     should_stop: Optional[Callable[[], bool]] = None,
+    explore: bool = False,
+    explore_weight: float = EXPLORE_WEIGHT,
 ) -> Generator[Dict[str, Any], None, None]:
     """Yields unique loop paths.
 
@@ -615,8 +729,28 @@ def find_paths_turns_dist(
         'pleasant' — heap (turns + discomfort, dist, node_id)
         'discomfort' — heap (discomfort, dist, node_id); turns are reported only
         'distance' — heap (dist, node_id); turns are reported only
+      explore (stress orders only): add explore_weight × (doublings of
+        expansions past 64 in the frontier's ~400 m cell + loops already
+        yielded through that cell) to the heap key. Counts only grow, so a popped item whose
+        penalty has risen past the next key is pushed back instead of expanded.
     """
     stress_order = order in ('pleasant', 'discomfort')
+    explore = explore and stress_order
+    node_cell: Dict[int, Tuple[int, int]] = {}
+    cell_pops: Dict[Tuple[int, int], int] = {}
+    cell_loops: Dict[Tuple[int, int], int] = {}
+    if explore:
+        k = math.cos(math.radians(G.nodes[start_node]['y']))
+        scale = 111139.0 / EXPLORE_CELL_M
+        for n, nd in G.nodes(data=True):
+            node_cell[n] = (int(nd['y'] * scale), int(nd['x'] * k * scale))
+
+    def explore_penalty(n):
+        # Whole steps per doubling: a smooth log would rise on every pop and
+        # re-queue nearly every stale item.
+        cell = node_cell[n]
+        doublings = int(cell_pops.get(cell, 0) / EXPLORE_POP_SCALE).bit_length()
+        return explore_weight * (doublings + cell_loops.get(cell, 0))
     if stress_order and G.number_of_edges():
         annotate_edge_stress(G, turns_per_mile=road_weights, rural=rural_scale)
 
@@ -670,7 +804,17 @@ def find_paths_turns_dist(
                 break
 
             if stress_order:
-                (_priority, dist, _), curr_node, visited_mask, turns, discomfort = heapq.heappop(queue)
+                item = heapq.heappop(queue)
+                (_priority, dist, _), curr_node, visited_mask, turns, discomfort = item
+                if explore:
+                    base = turns + discomfort if order == 'pleasant' else discomfort
+                    fresh = base + explore_penalty(curr_node.id)
+                    if fresh > _priority + 1e-9 and queue and fresh > queue[0][0][0]:
+                        heapq.heappush(queue, ((fresh, dist, item[0][2]),) + item[1:])
+                        iters -= 1
+                        continue
+                    cell = node_cell[curr_node.id]
+                    cell_pops[cell] = cell_pops.get(cell, 0) + 1
             elif order == 'distance':
                 (dist, _), curr_node, visited_mask, turns = heapq.heappop(queue)
             else:
@@ -745,6 +889,9 @@ def find_paths_turns_dist(
                     path_masks.add(visited_mask)
                     if centroid:
                         existing_centroids.append(centroid)
+                    if explore:
+                        for cell in {node_cell[n] for n in path_segment}:
+                            cell_loops[cell] = cell_loops.get(cell, 0) + 1
                     yielded += 1
                     if debugger is not None:
                         debugger.record_yield(path)
@@ -786,6 +933,8 @@ def find_paths_turns_dist(
                         priority = new_turns + new_discomfort
                     else:
                         priority = new_discomfort
+                    if explore:
+                        priority += explore_penalty(neighbor)
                     new_node = PathNode(neighbor, curr_node, new_dist)
                     heapq.heappush(queue, (
                         (priority, new_dist, tiebreaker),
@@ -839,10 +988,35 @@ def find_paths(
     road_weights: Optional[Dict[str, float]] = None,
     rural_scale: bool = True,
     should_stop: Optional[Callable[[], bool]] = None,
+    explore_weight: Optional[float] = None,
+    detour_weight: Optional[float] = None,
+    reuse_weight: Optional[float] = None,
 ) -> Generator[Dict[str, Any], None, None]:
-    """Dispatcher: look up strategy in ALGORITHMS and run the turns-first core."""
+    """Dispatcher: look up strategy in ALGORITHMS and run its search.
+
+    explore_weight / detour_weight / reuse_weight tune the explore and tree
+    strategies; None keeps each strategy's default.
+    """
     algo_id = resolve_algorithm(algorithm)
     opts = ALGORITHMS[algo_id]
+
+    if opts.get('order') == 'tree':
+        from loop_tree import find_paths_tree
+        tree_kw = {}
+        if explore_weight is not None:
+            tree_kw['explore_weight'] = float(explore_weight)
+        if detour_weight is not None:
+            tree_kw['detour_weight'] = float(detour_weight)
+        if reuse_weight is not None:
+            tree_kw['reuse_weight'] = float(reuse_weight)
+        print(f"Algorithm: {algo_id} ({opts['label']}) {tree_kw}")
+        return find_paths_tree(
+            G, start_node, min_path_length, max_path_length, loop_ratio_floor,
+            min_loop_length=min_loop_length, min_dist_m=min_dist_m,
+            road_weights=road_weights, rural_scale=rural_scale,
+            should_stop=should_stop, **tree_kw,
+        )
+
     bucket_cap = opts['node_bucket_cap']
     if bucket_cap is not None:
         bucket_cap = int(cap_k) if cap_k is not None else int(bucket_cap)
@@ -866,4 +1040,6 @@ def find_paths(
         road_weights=road_weights,
         rural_scale=rural_scale,
         should_stop=should_stop,
+        explore=bool(opts.get('explore')),
+        explore_weight=EXPLORE_WEIGHT if explore_weight is None else float(explore_weight),
     )

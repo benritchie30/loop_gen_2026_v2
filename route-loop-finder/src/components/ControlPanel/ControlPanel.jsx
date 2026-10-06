@@ -221,7 +221,18 @@ function ControlPanel({
             { id: 'pleasant_capped', label: 'Pleasant roads (capped)' },
             { id: 'discomfort_capped', label: 'Pleasant, ignore turns (capped)' },
             { id: 'distance_capped', label: 'Distance only (capped)' },
+            { id: 'pleasant_explore', label: 'Pleasant + explore new areas (capped)' },
+            { id: 'tree_loops', label: 'Area sweep (best-route trees)' },
         ];
+
+    const algorithmId = String(genSettings?.algorithm || '');
+    const usesCap = algorithmId.endsWith('_capped') || algorithmId === 'pleasant_explore';
+    const usesExplore = algorithmId === 'pleasant_explore' || algorithmId === 'tree_loops';
+    const isTree = algorithmId === 'tree_loops';
+    const optionalNumber = (name) => (e) => {
+        const num = parseFloat(e.target.value);
+        setGenSettings(prev => ({ ...prev, [name]: Number.isFinite(num) && num >= 0 ? num : null }));
+    };
 
     return (
         <div className="control-panel">
@@ -402,7 +413,7 @@ function ControlPanel({
                                     </select>
                                 </label>
 
-                                {String(genSettings.algorithm || '').endsWith('_capped') && (
+                                {usesCap && (
                                     <label className="setting-item full-width">
                                         <span>Cap per node/bucket</span>
                                         <input
@@ -411,6 +422,43 @@ function ControlPanel({
                                             value={genSettings.cap_k ?? 3}
                                             onChange={handleSettingChange}
                                             min="1" max="50" step="1"
+                                        />
+                                    </label>
+                                )}
+
+                                {usesExplore && (
+                                    <label className="setting-item" title="How strongly routes are pushed toward areas not shown yet. 0 turns it off.">
+                                        <span>Explore weight</span>
+                                        <input
+                                            type="number"
+                                            value={genSettings.explore_weight ?? ''}
+                                            placeholder={isTree ? '2' : '1'}
+                                            onChange={optionalNumber('explore_weight')}
+                                            min="0" max="10" step="0.5"
+                                        />
+                                    </label>
+                                )}
+                                {isTree && (
+                                    <label className="setting-item" title="Turns per mile charged for distance. Higher keeps each side more direct; lower lets it detour onto quieter roads.">
+                                        <span>Detour cost</span>
+                                        <input
+                                            type="number"
+                                            value={genSettings.detour_weight ?? ''}
+                                            placeholder="0.3"
+                                            onChange={optionalNumber('detour_weight')}
+                                            min="0" max="5" step="0.1"
+                                        />
+                                    </label>
+                                )}
+                                {isTree && (
+                                    <label className="setting-item" title="Turns per mile added to roads already used by a sent route, so later rounds find alternatives.">
+                                        <span>Reuse penalty</span>
+                                        <input
+                                            type="number"
+                                            value={genSettings.reuse_weight ?? ''}
+                                            placeholder="1"
+                                            onChange={optionalNumber('reuse_weight')}
+                                            min="0" max="10" step="0.5"
                                         />
                                     </label>
                                 )}
@@ -683,6 +731,7 @@ function ControlPanel({
                                         className="control-panel__select"
                                         style={{ flex: 1 }}
                                     >
+                                        <option value="found">Found order</option>
                                         <option value="similar">Similar routes</option>
                                         <option value="total_miles">Distance</option>
                                         <option value="difficulty">Difficulty</option>
@@ -697,7 +746,9 @@ function ControlPanel({
                                         onClick={() => setSortAscending(!sortAscending)}
                                         title={sortBy === 'similar'
                                             ? (sortAscending ? 'Start with shortest' : 'Start with longest')
-                                            : (sortAscending ? 'Ascending' : 'Descending')}
+                                            : sortBy === 'found'
+                                                ? (sortAscending ? 'First found first' : 'Last found first')
+                                                : (sortAscending ? 'Ascending' : 'Descending')}
                                         style={{ minWidth: '32px' }}
                                     >
                                         <ArrowUpDown size={16} />

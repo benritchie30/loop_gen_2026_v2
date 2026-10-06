@@ -138,9 +138,14 @@ export function filterByMetrics(paths, filters) {
 
 /**
  * Sort paths by a property.
+ * 'found' keeps the order the search yielded them (best first).
  * 'similar' walks routes that share ground, starting at the shortest or longest.
  */
 export function sortPaths(paths, sortBy = 'loop_miles', ascending = true) {
+    if (sortBy === 'found') {
+        const ordered = [...paths];
+        return ascending ? ordered : ordered.reverse();
+    }
     if (sortBy === 'similar' || sortBy === 'spatial') {
         return sortBySimilarity(paths, ascending);
     }

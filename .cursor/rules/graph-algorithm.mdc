@@ -1,6 +1,6 @@
 ---
 description: Pathfinding heuristics, graph simplification intent, and gotchas
-globs: backend/loop_generator.py,backend/graph_manager.py,backend/road_stress.py,backend/server.py,backend/search_debug.py
+globs: backend/loop_generator.py,backend/loop_tree.py,backend/graph_manager.py,backend/road_stress.py,backend/server.py,backend/search_debug.py,backend/bench_search.py
 alwaysApply: false
 ---
 
@@ -16,6 +16,12 @@ alwaysApply: false
 - `pleasant_capped` — same prune, A* bound, and cap as `turns_capped`, but the heap key is `(turns + discomfort, distance, node_id)`.
 - `discomfort_capped` — same limits, heap key `(discomfort, distance, node_id)`. Turns are counted for display only.
 - `distance_capped` — same limits, heap key `(distance, node_id)`. No stress and no turns in the order. Turns are still reported.
+- `pleasant_explore` — `pleasant_capped` plus a novelty penalty on the heap key: `explore_weight` × (doublings of expansions past 64 in the frontier's 400 m cell + loops already yielded through that cell). Counts only grow, so a popped item whose penalty rose past the heap top is re-pushed instead of expanded. The penalty is stepwise on purpose; a smooth log re-queued ~8× more items.
+- `tree_loops` — separate module `loop_tree.py`, not the best-first core. Edge-state Dijkstra grows a best outbound tree and a best return tree (cost = turns + discomfort + `detour_weight`/mi + reuse penalty). Each junction pairs an arriving outbound route with a leaving return route (best 2 pairs per junction). The pair's walk is cut at the first revisited node into a lollipop (same closing rule as the core). A stem with a one-way edge returns via the return tree's route if it stays within 150 m of the stem. Stream order: (turns + discomfort)/mi × (1 + `explore_weight` × (1 − novelty)), novelty from 400 m cells already covered by sent loops. Every `round_every` sends, or when the next candidate is > 1.5× the best sent, both trees regrow with `reuse_weight`/mi on roads used by sent loops. Turns here use road direction within 25 m of the junction, not the node-to-node chord; on merged curvy edges the chord counts bends as turns.
+
+`explore_weight`, `detour_weight`, `reuse_weight` are optional on `START_GENERATION`; omitted means each strategy's default (tree: 2 / 0.3 / 1; explore: 1).
+
+`backend/bench_search.py` runs strategies headless and prints speed, coverage (400 m cells under loop portions), turns/mi by both turn definitions, and discomfort/mi; `--png` writes overview and per-route tiles to `backend/bench_out/`.
 
 Class weights (turns per mile) can be overridden per search via `road_weights` and `rural_scale` on `START_GENERATION`. Pleasant and discomfort orders always recompute `stress` from those weights. Link classes follow their parent (`road` follows secondary, `bridleway` follows path). Turns-first orders ignore the weights. The `turns` heap item stays `(turns, distance, node_id)`.
 
@@ -26,6 +32,8 @@ Turns-first is intentional: it surfaces simple, followable corridors. A turn is 
 Discomfort for a yielded path is recomputed on the full lollipop (stem both ways). The reported turn count stays the one-way search count.
 
 `max_path_length` bounds the one-way search distance (stem + loop), not the full lollipop `2*stem + loop`. Reported `total_miles` can exceed the typed max.
+
+Bearings, first-edge lookups, per-edge 50 m samples (with SRTM elevation), and per-edge centroid sums are memoized per graph (weak-keyed, never pickled). Output is identical to recomputing. `_edge_data` and edge geometry fall back to v→u when a stem retraces a one-way u→v; before that, those stem pieces were drawn as straight jumps and scored zero discomfort.
 
 Uniqueness: the owner **only uses centroid dedup** (reject if sampled-geometry centroid is within `min_dist_m` of a kept path). Jaccard is leftover — it missed "same roads, different node IDs" at intersections. Prefer centroid if you touch uniqueness.
 

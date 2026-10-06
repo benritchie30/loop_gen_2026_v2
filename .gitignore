@@ -11,6 +11,7 @@ backend/graphs/
 backend/cache/
 backend/simp_debug/
 backend/search_debug/
+backend/bench_out/
 backend/.env
 
 # JavaScript/Node
