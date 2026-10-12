@@ -69,10 +69,16 @@ function ControlPanel({
     activeGraph,
     onSwitchGraph,
     onStartGraphCreate,
+    onStartGraphCrop,
+    onCancelGraphCreate,
+    onCreateGraph,
     isCreatingGraph,
     graphCreateMode,
+    graphCreateAction,
     setGraphCreateMode,
     graphBounds,
+    exclusionZones,
+    setExclusionZones,
     showArrows,
     setShowArrows,
     showPathPreview,
@@ -337,12 +343,17 @@ function ControlPanel({
                                 activeGraph={activeGraph}
                                 onSwitchGraph={onSwitchGraph}
                                 onStartGraphCreate={onStartGraphCreate}
+                                onStartGraphCrop={onStartGraphCrop}
+                                onCancelGraphCreate={onCancelGraphCreate}
+                                onCreateGraph={onCreateGraph}
                                 isCreatingGraph={isCreatingGraph}
                                 isGraphCreateMode={mode === 'graphCreate'}
                                 graphCreateMode={graphCreateMode}
+                                graphCreateAction={graphCreateAction}
                                 setGraphCreateMode={setGraphCreateMode}
                                 graphBounds={graphBounds}
-                                // Exclusion props
+                                exclusionZones={exclusionZones}
+                                setExclusionZones={setExclusionZones}
                                 isDrawingExclusion={isDrawingExclusion}
                                 setIsDrawingExclusion={setIsDrawingExclusion}
                             />

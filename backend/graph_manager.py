@@ -7,6 +7,7 @@ import osmnx as ox
 import networkx as nx
 from shapely.geometry import Polygon, Point, LineString
 from shapely.ops import unary_union
+from shapely.prepared import prep
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import srtm
@@ -731,6 +732,289 @@ class GraphManager:
             'radius_miles': radius_miles
         }
         return self._finalize_and_save_graph(G, name, boundary_metadata, exclusion_zones)
+
+    @staticmethod
+    def _as_polygonal(geom):
+        """Polygon or MultiPolygon, or None when the geometry has no area."""
+        if geom is None or geom.is_empty:
+            return None
+        if not geom.is_valid:
+            try:
+                from shapely import make_valid
+                geom = make_valid(geom)
+            except Exception:
+                geom = geom.buffer(0)
+        if geom is None or geom.is_empty:
+            return None
+        if geom.geom_type in ("Polygon", "MultiPolygon"):
+            return geom
+        if geom.geom_type == "GeometryCollection":
+            parts = [
+                part for part in geom.geoms
+                if part.geom_type in ("Polygon", "MultiPolygon") and not part.is_empty
+            ]
+            if not parts:
+                return None
+            return unary_union(parts)
+        return None
+
+    @staticmethod
+    def _circle_polygon(center_lat, center_lng, radius_miles):
+        """Meter-radius circle in lon/lat, matching the circle drawn on the map."""
+        radius_m = float(radius_miles) * 1609.344
+        origin = gpd.GeoSeries([Point(center_lng, center_lat)], crs="EPSG:4326")
+        projected = origin.to_crs(origin.estimate_utm_crs())
+        circle = projected.buffer(radius_m).to_crs("EPSG:4326").iloc[0]
+        return circle
+
+    @staticmethod
+    def _region_from_selection(boundary_type, exclusion_zones=None, south=None, west=None,
+                               north=None, east=None, coordinates=None,
+                               center_lat=None, center_lng=None, radius_miles=None):
+        """Keep-region for a crop: the selector shape minus exclusion polygons."""
+        if boundary_type == "polygon":
+            region = Polygon([(lng, lat) for lat, lng in coordinates])
+        elif boundary_type == "circle":
+            region = GraphManager._circle_polygon(center_lat, center_lng, radius_miles)
+        else:
+            south, west, north, east = GraphManager._canonical_bbox(south, west, north, east)
+            region = Polygon([(west, south), (east, south), (east, north), (west, north)])
+
+        region = GraphManager._as_polygonal(region)
+        if region is None:
+            raise ValueError("The selected shape is empty.")
+        # About 2 m, so a road that sits on the outline is kept.
+        region = region.buffer(2.0 / 111320.0)
+
+        for zone in exclusion_zones or []:
+            if not zone or len(zone) < 3:
+                continue
+            hole = GraphManager._as_polygonal(Polygon([(lng, lat) for lat, lng in zone]))
+            if hole is None:
+                continue
+            region = region.difference(hole)
+
+        region = GraphManager._as_polygonal(region)
+        if region is None:
+            raise ValueError("Exclusions removed the whole selected area.")
+        return region
+
+    @staticmethod
+    def _dist2(a, b):
+        return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2
+
+    @staticmethod
+    def _edge_linestring(G, u, v, data):
+        geom = data.get("geometry")
+        if getattr(geom, "geom_type", None) == "LineString" and len(geom.coords) >= 2:
+            return geom
+        return LineString([
+            (G.nodes[u]["x"], G.nodes[u]["y"]),
+            (G.nodes[v]["x"], G.nodes[v]["y"]),
+        ])
+
+    @staticmethod
+    def _longest_linestring(geom):
+        """Longest LineString inside an intersection result, if there is one."""
+        if geom is None or geom.is_empty:
+            return None
+        if geom.geom_type == "LineString":
+            return geom if len(geom.coords) >= 2 else None
+        if geom.geom_type in ("MultiLineString", "GeometryCollection"):
+            best = None
+            best_len = -1.0
+            for part in geom.geoms:
+                line = GraphManager._longest_linestring(part)
+                if line is not None and line.length > best_len:
+                    best = line
+                    best_len = line.length
+            return best
+        return None
+
+    @staticmethod
+    def _clip_graph_to_region(G, region):
+        """Keep the part of each road that lies inside region. Mutates G.
+
+        Roads that cross the outline are cut there and given a new endpoint,
+        instead of being deleted back to the previous intersection.
+        """
+        prepared = prep(region)
+        # Intersection points land a few ulps outside the outline. Accept those.
+        accept = prep(region.buffer(1.0 / 111320.0))
+        near = (2.0 / 111320.0) ** 2
+        numeric_ids = [node for node in G.nodes if isinstance(node, int)]
+        next_id = (max(numeric_ids) + 1) if numeric_ids else 0
+        boundary_nodes = {}
+
+        def endpoint_node(xy, original_id):
+            nonlocal next_id
+            if original_id in G:
+                node = G.nodes[original_id]
+                ox, oy = node.get("x"), node.get("y")
+                if ox is not None and oy is not None \
+                        and accept.covers(Point(ox, oy)) \
+                        and GraphManager._dist2((ox, oy), xy) <= near:
+                    return original_id
+            key = (round(xy[0], 6), round(xy[1], 6))
+            existing = boundary_nodes.get(key)
+            if existing is not None:
+                return existing
+            node_id = next_id
+            next_id += 1
+            G.add_node(node_id, x=float(xy[0]), y=float(xy[1]))
+            boundary_nodes[key] = node_id
+            return node_id
+
+        def ensure_elevation(node_id, u, v):
+            if "elevation" in G.nodes[node_id]:
+                return
+            eu = G.nodes[u].get("elevation") if u in G else None
+            ev = G.nodes[v].get("elevation") if v in G else None
+            if eu is not None and ev is not None:
+                elev = (float(eu) + float(ev)) / 2.0
+            elif eu is not None:
+                elev = float(eu)
+            elif ev is not None:
+                elev = float(ev)
+            else:
+                elev = 0
+            G.nodes[node_id]["elevation"] = elev
+
+        minx, miny, maxx, maxy = region.bounds
+        drops = []
+        replacements = []
+        # Snapshot first: cutting a road adds a boundary node mid-iteration.
+        for u, v, key, data in list(G.edges(keys=True, data=True)):
+            try:
+                geom = GraphManager._edge_linestring(G, u, v, data)
+            except KeyError:
+                drops.append((u, v, key))
+                continue
+            bounds = geom.bounds
+            if bounds[2] < minx or bounds[0] > maxx or bounds[3] < miny or bounds[1] > maxy:
+                drops.append((u, v, key))
+                continue
+            if prepared.covers(geom):
+                continue
+
+            clipped = GraphManager._longest_linestring(geom.intersection(region))
+            if clipped is None:
+                drops.append((u, v, key))
+                continue
+
+            uxy = (G.nodes[u]["x"], G.nodes[u]["y"])
+            vxy = (G.nodes[v]["x"], G.nodes[v]["y"])
+            coords = list(clipped.coords)
+            if GraphManager._dist2(coords[0], vxy) + GraphManager._dist2(coords[-1], uxy) < \
+                    GraphManager._dist2(coords[0], uxy) + GraphManager._dist2(coords[-1], vxy):
+                coords = coords[::-1]
+                clipped = LineString(coords)
+
+            new_u = endpoint_node(coords[0], u)
+            new_v = endpoint_node(coords[-1], v)
+            if new_u == new_v:
+                drops.append((u, v, key))
+                continue
+            ensure_elevation(new_u, u, v)
+            ensure_elevation(new_v, u, v)
+
+            old_len = float(data.get("length") or 0)
+            ratio = (clipped.length / geom.length) if geom.length else 1.0
+            new_data = dict(data)
+            new_data["geometry"] = clipped
+            new_data["length"] = old_len * ratio if old_len else 0.0
+            replacements.append((u, v, key, new_u, new_v, new_data))
+
+        if drops:
+            G.remove_edges_from(drops)
+        for u, v, key, new_u, new_v, new_data in replacements:
+            if G.has_edge(u, v, key):
+                G.remove_edge(u, v, key)
+            G.add_edge(new_u, new_v, **new_data)
+
+        outside = [
+            node for node, data in G.nodes(data=True)
+            if data.get("x") is None or data.get("y") is None
+            or not accept.covers(Point(data["x"], data["y"]))
+        ]
+        if outside:
+            G.remove_nodes_from(outside)
+        isolates = list(nx.isolates(G))
+        if isolates:
+            G.remove_nodes_from(isolates)
+        return G
+
+    def crop_graph(self, source_name: str, name: str, boundary_type: str,
+                   exclusion_zones: list = None, **bounds):
+        """Save a new graph by clipping an existing one. Does not call Overpass."""
+        if self._graphs_dir is None:
+            raise ValueError("Graphs directory not set.")
+        if not source_name:
+            raise ValueError("No graph is loaded to crop.")
+        if name == source_name:
+            raise ValueError(f"Choose a new name. '{source_name}' is left unchanged.")
+
+        if source_name == self._active_name and self._graph is not None:
+            G = self._graph.copy()
+        else:
+            path = os.path.join(self._graphs_dir, f"{source_name}.gpickle")
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"Graph file not found: {path}")
+            with open(path, "rb") as f:
+                G = pickle.load(f)
+
+        before_nodes = G.number_of_nodes()
+        print(f"Cropping '{source_name}' ({before_nodes} nodes) -> '{name}' ({boundary_type})")
+        region = self._region_from_selection(
+            boundary_type, exclusion_zones=exclusion_zones, **bounds
+        )
+        self._clip_graph_to_region(G, region)
+        if G.number_of_nodes() == 0 or G.number_of_edges() == 0:
+            raise ValueError(
+                "That area has no roads in the current graph. "
+                "Draw a larger shape inside it."
+            )
+
+        sample_node = next(iter(G.nodes))
+        if "elevation" not in G.nodes[sample_node]:
+            self._add_elevation_data(G)
+        _u, _v, sample_edge = next(iter(G.edges(data=True)))
+        if "stress" not in sample_edge:
+            annotate_edge_stress(G)
+
+        G = self._relabel_graph(G)
+
+        os.makedirs(self._graphs_dir, exist_ok=True)
+        file_path = os.path.join(self._graphs_dir, f"{name}.gpickle")
+        with open(file_path, "wb") as f:
+            pickle.dump(G, f, pickle.HIGHEST_PROTOCOL)
+
+        if boundary_type == "polygon":
+            boundary_metadata = {
+                "type": "polygon",
+                "coordinates": bounds.get("coordinates"),
+                "cropped_from": source_name,
+            }
+        elif boundary_type == "circle":
+            boundary_metadata = {
+                "type": "circle",
+                "center": [bounds.get("center_lat"), bounds.get("center_lng")],
+                "radius_miles": bounds.get("radius_miles"),
+                "cropped_from": source_name,
+            }
+        else:
+            south, west, north, east = self._canonical_bbox(
+                bounds["south"], bounds["west"], bounds["north"], bounds["east"]
+            )
+            boundary_metadata = {
+                "type": "box",
+                "north": north, "south": south, "east": east, "west": west,
+                "cropped_from": source_name,
+            }
+        self._save_boundary(name, boundary_metadata, exclusion_zones)
+        print(f"Cropped graph saved at: {file_path} "
+              f"({G.number_of_nodes()} nodes, {G.number_of_edges()} edges)")
+        return name
 
     @staticmethod
     def _add_elevation_data(G):

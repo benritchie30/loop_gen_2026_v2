@@ -39,6 +39,7 @@ function MapView({
     graphBounds,
     onGraphBoundsChange,
     graphCreateMode,
+    graphCreateAction,
     graphBoundaries,
     activeGraph,
     showArrows,
@@ -107,14 +108,15 @@ function MapView({
             return null;
         }
         if (mode === 'graphCreate') {
+            const submit = graphCreateAction === 'crop' ? 'crop this graph' : 'download this area';
             if (exclusionDraw) return 'Drag a shape to exclude it from the graph';
             if (graphCreateMode === 'polygon') {
-                return 'Click to add polygon vertices, then press Enter';
+                return `Click to add polygon vertices, then press Enter to ${submit}`;
             }
             if (graphCreateMode === 'circle') {
-                return 'Drag center pin and radius handle, then press Enter';
+                return `Drag center pin and radius handle, then press Enter to ${submit}`;
             }
-            return 'Drag the markers to set graph bounds, then press Enter';
+            return `Drag the markers to set the area, then press Enter to ${submit}`;
         }
         return null;
     };
@@ -141,6 +143,11 @@ function MapView({
 
     const activeBoundary = shouldShowBoundary
         ? graphBoundaries[activeGraph]
+        : null;
+
+    // While cropping, keep the source outline visible under the selector.
+    const cropSourceBoundary = mode === 'graphCreate' && graphCreateAction === 'crop' && activeGraph
+        ? graphBoundaries?.[activeGraph]
         : null;
 
     const boundaryPreviewStyle = {
@@ -306,6 +313,32 @@ function MapView({
                         showPathPreview={showPathPreview}
                         pathPreviewOpacity={pathPreviewOpacity}
                         pathsInteractive={!activeTool}
+                    />
+                )}
+
+                {cropSourceBoundary?.type === 'box' && (
+                    <Rectangle
+                        bounds={[
+                            [cropSourceBoundary.south, cropSourceBoundary.west],
+                            [cropSourceBoundary.north, cropSourceBoundary.east]
+                        ]}
+                        pathOptions={boundaryPreviewStyle}
+                    />
+                )}
+                {cropSourceBoundary?.type === 'polygon' && (
+                    <Polygon
+                        positions={cropSourceBoundary.coordinates.map(([lat, lng]) => [lat, lng])}
+                        pathOptions={boundaryPreviewStyle}
+                    />
+                )}
+                {cropSourceBoundary?.type === 'circle' && cropSourceBoundary.center != null && (
+                    <Circle
+                        center={[
+                            Array.isArray(cropSourceBoundary.center) ? cropSourceBoundary.center[0] : cropSourceBoundary.center.lat,
+                            Array.isArray(cropSourceBoundary.center) ? cropSourceBoundary.center[1] : cropSourceBoundary.center.lng
+                        ]}
+                        radius={cropSourceBoundary.radius_miles * 1609.34}
+                        pathOptions={boundaryPreviewStyle}
                     />
                 )}
 

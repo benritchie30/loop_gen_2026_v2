@@ -197,7 +197,8 @@ function App() {
   const [activeGraph, setActiveGraph] = useState(null);
   const [graphBounds, setGraphBounds] = useState(null);
   const [isCreatingGraph, setIsCreatingGraph] = useState(false);
-  const [graphCreateMode, setGraphCreateMode] = useState('box'); // 'box' or 'polygon'
+  const [graphCreateMode, setGraphCreateMode] = useState('box'); // 'box', 'circle', or 'polygon'
+  const [graphCreateAction, setGraphCreateAction] = useState('download'); // 'download' | 'crop'
   const [graphBoundaries, setGraphBoundaries] = useState({});
   const [algorithms, setAlgorithms] = useState([
     { id: 'turns', label: 'Turns-first (baseline)' },
@@ -268,6 +269,9 @@ function App() {
           setIsCreatingGraph(false);
           setActiveGraph(message.name);
           setGraphBounds(null);
+          setGraphNodes([]);
+          setExclusionZones([]);
+          setIsDrawingExclusion(false);
           setMode('input');
           break;
 
@@ -328,6 +332,9 @@ function App() {
     const fromActive = activeGraph ? boundaryToGraphBounds(graphBoundaries[activeGraph]) : null;
     const startShape = lastShape?.type ? lastShape : fromActive;
 
+    setExclusionZones([]);
+    setIsDrawingExclusion(false);
+    setGraphCreateAction('download');
     if (startShape?.type) {
       setGraphCreateMode(startShape.type);
       setGraphBounds(startShape);
@@ -337,6 +344,29 @@ function App() {
     }
     setMode('graphCreate');
   }, [setMode, activeGraph, graphBoundaries]);
+
+  const handleStartGraphCrop = useCallback(() => {
+    if (!activeGraph) return;
+    const fromActive = boundaryToGraphBounds(graphBoundaries[activeGraph]);
+    setExclusionZones([]);
+    setIsDrawingExclusion(false);
+    setGraphCreateAction('crop');
+    if (fromActive?.type) {
+      setGraphCreateMode(fromActive.type);
+      setGraphBounds(fromActive);
+    } else {
+      setGraphCreateMode('box');
+      setGraphBounds(null);
+    }
+    setMode('graphCreate');
+  }, [setMode, activeGraph, graphBoundaries]);
+
+  const handleCancelGraphCreate = useCallback(() => {
+    setGraphBounds(null);
+    setExclusionZones([]);
+    setIsDrawingExclusion(false);
+    setMode('input');
+  }, [setMode]);
 
   const handleGraphBoundsChange = useCallback((bounds) => {
     setGraphBounds(bounds);
@@ -388,40 +418,47 @@ function App() {
 
   // Define handleCreateGraph
   const handleCreateGraph = useCallback(() => {
-    if (!graphBounds) return;
+    if (!isValidGraphBounds(graphBounds)) return;
+    const cropping = graphCreateAction === 'crop';
+    if (cropping && !activeGraph) return;
 
-    // Validate polygon has enough points
-    if (graphBounds.type === 'polygon' && (!graphBounds.coordinates || graphBounds.coordinates.length < 3)) {
+    const name = window.prompt(
+      cropping
+        ? `Name for the crop of ${activeGraph}:`
+        : 'Enter a name for the new graph:'
+    );
+    if (!name || !name.trim()) return;
+    const trimmed = name.trim();
+    if (cropping && trimmed === activeGraph) {
+      alert(`Choose a different name. ${activeGraph} stays as it is.`);
       return;
     }
 
-    const name = window.prompt('Enter a name for the new graph:');
-    if (name && name.trim()) {
-      const payload = {
-        name: name.trim(),
-        boundary_type: graphBounds.type,
-        exclusion_zones: exclusionZones // Add exclusion zones
-      };
+    const payload = {
+      name: trimmed,
+      boundary_type: graphBounds.type,
+      exclusion_zones: exclusionZones
+    };
 
-      if (graphBounds.type === 'polygon') {
-        payload.coordinates = graphBounds.coordinates;
-      } else if (graphBounds.type === 'circle') {
-        payload.center_lat = graphBounds.center.lat;
-        payload.center_lng = graphBounds.center.lng;
-        payload.radius_miles = graphBounds.radiusMiles;
-      } else {
-        // Box — min/max so swapped handles still make a valid OSM bbox
-        const { nw, se } = graphBounds;
-        payload.south = Math.min(nw.lat, se.lat);
-        payload.north = Math.max(nw.lat, se.lat);
-        payload.west = Math.min(nw.lng, se.lng);
-        payload.east = Math.max(nw.lng, se.lng);
-      }
-
-      saveLastGraphShape(graphBounds);
-      sendMessage('CREATE_GRAPH', payload);
+    if (graphBounds.type === 'polygon') {
+      payload.coordinates = graphBounds.coordinates;
+    } else if (graphBounds.type === 'circle') {
+      payload.center_lat = graphBounds.center.lat;
+      payload.center_lng = graphBounds.center.lng;
+      payload.radius_miles = graphBounds.radiusMiles;
+    } else {
+      // Box — min/max so swapped handles still make a valid OSM bbox
+      const { nw, se } = graphBounds;
+      payload.south = Math.min(nw.lat, se.lat);
+      payload.north = Math.max(nw.lat, se.lat);
+      payload.west = Math.min(nw.lng, se.lng);
+      payload.east = Math.max(nw.lng, se.lng);
     }
-  }, [graphBounds, exclusionZones, sendMessage]);
+
+    if (cropping) payload.source = activeGraph;
+    saveLastGraphShape(graphBounds);
+    sendMessage(cropping ? 'CROP_GRAPH' : 'CREATE_GRAPH', payload);
+  }, [graphBounds, exclusionZones, sendMessage, graphCreateAction, activeGraph]);
 
   // Keyboard Shortcuts Effect - Updated to use handleCreateGraph
   useEffect(() => {
@@ -455,8 +492,7 @@ function App() {
 
       // Graph Create Mode: Escape or Backspace to cancel
       if ((e.key === 'Escape' || e.key === 'Backspace') && mode === 'graphCreate') {
-        setGraphBounds(null);
-        setMode('input');
+        handleCancelGraphCreate();
       }
 
       // Graph Create Mode: Z to undo / remove last exclusion zone
@@ -533,7 +569,7 @@ function App() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [mode, pendingMarker, sendMessage, selectPathSet, setMode, undoLastSelection, genSettings, graphBounds, isCreatingGraph, nextPath, prevPath, activeTool, setIsElevationMinimized, graphCreateMode, handleCreateGraph, exclusionZones, setIsDrawingExclusion, isGenerating, handleStopGeneration]);
+  }, [mode, pendingMarker, sendMessage, selectPathSet, setMode, undoLastSelection, genSettings, graphBounds, isCreatingGraph, nextPath, prevPath, activeTool, setIsElevationMinimized, graphCreateMode, handleCreateGraph, handleCancelGraphCreate, exclusionZones, setIsDrawingExclusion, isGenerating, handleStopGeneration]);
 
   // Auto-show elevation window when path with elevation data is selected
   // Auto-show elevation window when path with elevation data is selected
@@ -589,6 +625,7 @@ function App() {
         graphBounds={graphBounds}
         onGraphBoundsChange={handleGraphBoundsChange}
         graphCreateMode={graphCreateMode}
+        graphCreateAction={graphCreateAction}
         graphBoundaries={graphBoundaries}
         activeGraph={activeGraph}
         showArrows={showArrows}
@@ -645,9 +682,12 @@ function App() {
         activeGraph={activeGraph}
         onSwitchGraph={handleSwitchGraph}
         onStartGraphCreate={handleStartGraphCreate}
+        onStartGraphCrop={handleStartGraphCrop}
+        onCancelGraphCreate={handleCancelGraphCreate}
         // Graph Create Props
         isGraphCreateMode={mode === 'graphCreate'}
         graphCreateMode={graphCreateMode}
+        graphCreateAction={graphCreateAction}
         setGraphCreateMode={setGraphCreateMode}
         graphBounds={graphBounds}
         onCreateGraph={handleCreateGraph}

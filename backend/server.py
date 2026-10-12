@@ -55,6 +55,8 @@ async def handler(websocket):
                     await handle_switch_graph(websocket, data)
                 elif msg_type == "CREATE_GRAPH":
                     await handle_create_graph(websocket, data)
+                elif msg_type == "CROP_GRAPH":
+                    await handle_crop_graph(websocket, data)
                 elif msg_type == "GET_GRAPH_NODES":
                     await handle_get_graph_nodes(websocket, data)
                 else:
@@ -110,94 +112,156 @@ async def handle_switch_graph(websocket, data):
             "error": str(e)
         }))
 
-async def handle_create_graph(websocket, data):
-    """Create a new graph from bounding box or polygon coordinates."""
-    name = data.get("name")
-    boundary_type = data.get("boundary_type", "box")
-    # custom_filter = data.get("filter", '["highway"~"trunk|primary|secondary|tertiary"]')
-    exclusion_zones = data.get("exclusion_zones", [])
+def _parse_region(data):
+    """Shared box / circle / polygon payload for download and crop.
 
+    Returns (region dict, error message).
+    """
+    name = (data.get("name") or "").strip()
     if not name:
-        await websocket.send(json.dumps({
-            "type": "GRAPH_CREATE_ERROR",
-            "error": "Missing required field: name"
-        }))
-        return
+        return None, "Missing required field: name"
 
-    # Validate based on boundary type
+    boundary_type = data.get("boundary_type", "box")
+    exclusion_zones = data.get("exclusion_zones") or []
+    region = {
+        "name": name,
+        "boundary_type": boundary_type,
+        "exclusion_zones": exclusion_zones,
+    }
+
     if boundary_type == "polygon":
         coordinates = data.get("coordinates")
         if not coordinates or len(coordinates) < 3:
-            await websocket.send(json.dumps({
-                "type": "GRAPH_CREATE_ERROR",
-                "error": "Polygon requires at least 3 coordinate pairs"
-            }))
-            return
+            return None, "Polygon requires at least 3 coordinate pairs"
+        region["coordinates"] = coordinates
     elif boundary_type == "circle":
         center_lat = data.get("center_lat")
         center_lng = data.get("center_lng")
         radius_miles = data.get("radius_miles")
+        try:
+            radius_miles = float(radius_miles)
+        except (TypeError, ValueError):
+            radius_miles = None
         if center_lat is None or center_lng is None or radius_miles is None or radius_miles <= 0:
-            await websocket.send(json.dumps({
-                "type": "GRAPH_CREATE_ERROR",
-                "error": "Circle requires center_lat, center_lng, and positive radius_miles"
-            }))
-            return
+            return None, "Circle requires center_lat, center_lng, and positive radius_miles"
+        region["center_lat"] = center_lat
+        region["center_lng"] = center_lng
+        region["radius_miles"] = radius_miles
     else:
+        region["boundary_type"] = "box"
         south = data.get("south")
         west = data.get("west")
         north = data.get("north")
         east = data.get("east")
-        if not all([south is not None, west is not None, north is not None, east is not None]):
-            await websocket.send(json.dumps({
-                "type": "GRAPH_CREATE_ERROR",
-                "error": "Missing required fields: south, west, north, east"
-            }))
-            return
+        if not all(value is not None for value in (south, west, north, east)):
+            return None, "Missing required fields: south, west, north, east"
+        region["south"] = south
+        region["west"] = west
+        region["north"] = north
+        region["east"] = east
+    return region, None
 
-    # Notify client that creation has started
+
+async def _send_graph_error(websocket, error):
+    await websocket.send(json.dumps({
+        "type": "GRAPH_CREATE_ERROR",
+        "error": error
+    }))
+
+
+def _download_region(region):
+    name = region["name"]
+    zones = region["exclusion_zones"]
+    boundary_type = region["boundary_type"]
+    if boundary_type == "polygon":
+        return gm.generate_graph_from_polygon(name, region["coordinates"], exclusion_zones=zones)
+    if boundary_type == "circle":
+        return gm.generate_graph_from_circle(
+            name, region["center_lat"], region["center_lng"], region["radius_miles"],
+            exclusion_zones=zones,
+        )
+    return gm.generate_graph(
+        name, region["south"], region["west"], region["north"], region["east"],
+        exclusion_zones=zones,
+    )
+
+
+def _crop_region(region, source_name):
+    return gm.crop_graph(
+        source_name,
+        region["name"],
+        region["boundary_type"],
+        exclusion_zones=region["exclusion_zones"],
+        south=region.get("south"),
+        west=region.get("west"),
+        north=region.get("north"),
+        east=region.get("east"),
+        coordinates=region.get("coordinates"),
+        center_lat=region.get("center_lat"),
+        center_lng=region.get("center_lng"),
+        radius_miles=region.get("radius_miles"),
+    )
+
+
+async def _finish_new_graph(websocket, name, built_label):
+    gm.switch_graph(name)
+    await websocket.send(json.dumps({
+        "type": "GRAPH_CREATED",
+        "name": name
+    }))
+    await send_graphs_list(websocket)
+    print(f"Graph '{name}' {built_label} and loaded successfully")
+
+
+async def handle_create_graph(websocket, data):
+    """Download a new graph from OpenStreetMap for the selected shape."""
+    region, error = _parse_region(data)
+    if error:
+        await _send_graph_error(websocket, error)
+        return
+
+    name = region["name"]
     await websocket.send(json.dumps({
         "type": "GRAPH_CREATING",
         "name": name
     }))
 
     try:
-        loop = asyncio.get_event_loop()
-        if boundary_type == "polygon":
-            await loop.run_in_executor(
-                None,
-                lambda: gm.generate_graph_from_polygon(name, coordinates, exclusion_zones=exclusion_zones)
-            )
-        elif boundary_type == "circle":
-            await loop.run_in_executor(
-                None,
-                lambda: gm.generate_graph_from_circle(name, center_lat, center_lng, radius_miles, exclusion_zones=exclusion_zones)
-            )
-        else:
-            await loop.run_in_executor(
-                None,
-                lambda: gm.generate_graph(name, south, west, north, east, exclusion_zones=exclusion_zones)
-            )
-
-        # Load the newly created graph
-        gm.switch_graph(name)
-
-        await websocket.send(json.dumps({
-            "type": "GRAPH_CREATED",
-            "name": name
-        }))
-
-        # Send updated graphs list (includes boundaries)
-        await send_graphs_list(websocket)
-        print(f"Graph '{name}' created and loaded successfully")
-
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _download_region, region)
+        await _finish_new_graph(websocket, name, "created")
     except Exception as e:
         import traceback
         traceback.print_exc()
-        await websocket.send(json.dumps({
-            "type": "GRAPH_CREATE_ERROR",
-            "error": str(e)
-        }))
+        await _send_graph_error(websocket, str(e))
+
+
+async def handle_crop_graph(websocket, data):
+    """Clip the loaded graph to the same box, circle, polygon, and exclusions."""
+    region, error = _parse_region(data)
+    if error:
+        await _send_graph_error(websocket, error)
+        return
+
+    source_name = (data.get("source") or gm.get_active_name() or "").strip()
+    if not source_name:
+        await _send_graph_error(websocket, "Load a graph before cropping.")
+        return
+
+    name = region["name"]
+    await websocket.send(json.dumps({
+        "type": "GRAPH_CREATING",
+        "name": name
+    }))
+
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _crop_region, region, source_name)
+        await _finish_new_graph(websocket, name, "cropped")
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        await _send_graph_error(websocket, str(e))
 
 def _parse_road_weights(raw):
     """Class → turns-per-mile. None means the built-in table. Negatives clamp to 0."""

@@ -61,6 +61,21 @@
     background: var(--color-primary-dark, #2563eb);
 }
 
+.new-graph-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.new-graph-btn.crop {
+    background: var(--color-bg);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+}
+
+.new-graph-btn.crop:hover:not(:disabled) {
+    background: var(--color-border);
+}
+
 /* Creation Mode Styles */
 .graph-selector__header {
     display: flex;
@@ -106,15 +121,44 @@
     border-color: var(--color-primary);
 }
 
-.graph-create-status {
-    margin-top: 12px;
-    text-align: center;
-    font-size: 0.85rem;
-    color: var(--color-text);
-    /* background: #111; removed */
-    padding: 8px;
+.graph-create-hint {
+    margin: 10px 0 0;
+    font-size: 0.75rem;
+    line-height: 1.35;
+    color: var(--color-text-muted);
+}
+
+.graph-create-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.graph-create-submit,
+.graph-create-cancel {
     border-radius: 4px;
-    /* border: 1px dashed #444; removed */
+    padding: 8px 10px;
+    cursor: pointer;
+    font-size: 0.8rem;
+}
+
+.graph-create-submit {
+    flex: 1;
+    background: var(--color-primary);
+    color: white;
+    border: none;
+}
+
+.graph-create-submit:disabled,
+.graph-create-cancel:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.graph-create-cancel {
+    background: var(--color-bg);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
 }
 
 .status-message.success {
