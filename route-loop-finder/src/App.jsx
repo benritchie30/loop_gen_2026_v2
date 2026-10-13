@@ -209,6 +209,9 @@ function App() {
     { id: 'distance_capped', label: 'Distance only (capped)' },
     { id: 'pleasant_explore', label: 'Pleasant + explore new areas (capped)' },
     { id: 'tree_loops', label: 'Area sweep (best-route trees)' },
+    { id: 'tree_cover', label: 'Area sweep: every area first, then every loop' },
+    { id: 'tree_triangles', label: 'Area sweep + three-leg loops' },
+    { id: 'loop_atlas', label: 'Loop atlas (three-leg, every area, then everything)' },
   ]);
 
   const generatingPathSetId = Object.keys(pathSets).find(id => !pathSets[id].isComplete) || null;

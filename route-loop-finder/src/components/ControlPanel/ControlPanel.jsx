@@ -229,12 +229,15 @@ function ControlPanel({
             { id: 'distance_capped', label: 'Distance only (capped)' },
             { id: 'pleasant_explore', label: 'Pleasant + explore new areas (capped)' },
             { id: 'tree_loops', label: 'Area sweep (best-route trees)' },
+            { id: 'tree_cover', label: 'Area sweep: every area first, then every loop' },
+            { id: 'tree_triangles', label: 'Area sweep + three-leg loops' },
+            { id: 'loop_atlas', label: 'Loop atlas (three-leg, every area, then everything)' },
         ];
 
     const algorithmId = String(genSettings?.algorithm || '');
     const usesCap = algorithmId.endsWith('_capped') || algorithmId === 'pleasant_explore';
-    const usesExplore = algorithmId === 'pleasant_explore' || algorithmId === 'tree_loops';
-    const isTree = algorithmId === 'tree_loops';
+    const isTree = algorithmId.startsWith('tree_') || algorithmId === 'loop_atlas';
+    const usesExplore = algorithmId === 'pleasant_explore' || isTree;
     const optionalNumber = (name) => (e) => {
         const num = parseFloat(e.target.value);
         setGenSettings(prev => ({ ...prev, [name]: Number.isFinite(num) && num >= 0 ? num : null }));
@@ -407,7 +410,7 @@ function ControlPanel({
                                         name="num_paths"
                                         value={genSettings.num_paths}
                                         onChange={handleSettingChange}
-                                        min="1" max="100"
+                                        min="1" max="2000"
                                     />
                                 </label>
 

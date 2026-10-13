@@ -669,6 +669,21 @@ ALGORITHMS: Dict[str, Dict[str, Any]] = {
         'label': 'Area sweep (best-route trees)',
         'order': 'tree',
     },
+    'tree_cover': {
+        'label': 'Area sweep: every area first, then every loop',
+        'order': 'tree',
+        'tree': {'policy': 'cover'},
+    },
+    'tree_triangles': {
+        'label': 'Area sweep + three-leg loops',
+        'order': 'tree',
+        'tree': {'triangles': True},
+    },
+    'loop_atlas': {
+        'label': 'Loop atlas (three-leg, every area, then everything)',
+        'order': 'tree',
+        'tree': {'triangles': True, 'policy': 'cover', 'noise': 1.0},
+    },
 }
 
 BUCKET_M = 0.5 / MILES_PER_METER  # 0.5 miles in meters
@@ -1002,7 +1017,7 @@ def find_paths(
 
     if opts.get('order') == 'tree':
         from loop_tree import find_paths_tree
-        tree_kw = {}
+        tree_kw = dict(opts.get('tree', {}), tag=algo_id)
         if explore_weight is not None:
             tree_kw['explore_weight'] = float(explore_weight)
         if detour_weight is not None:
