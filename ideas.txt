@@ -106,3 +106,14 @@ Add name/label to started routes
 back button to return to input page. Warns user they will lose their generation.
 or keep generatons if we don't refresh and I can go between generations?
 would this be too much on the front end if i have hundreds of paths saved there?
+
+
+
+simmilar routes sorts by simmilar starting from first yielded in set
+
+
+in graphs made on smaller cropped areas third leg yields more variety of paths
+on larger graphs it is not as useful
+
+what if i just had a map with all edges displayed. I could crop a selection to include/disclude
+

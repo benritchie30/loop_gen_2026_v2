@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronDown, Hand, Circle, Square, Lasso, Undo2, Ban, ArrowUpDown, Minimize2, Maximize2, Plus, Trash2, GripVertical } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronDown, Hand, Circle, Square, Lasso, Undo2, Ban, ArrowUpDown, ArrowLeftRight, Minimize2, Maximize2, Plus, Trash2, GripVertical } from 'lucide-react';
 import './ControlPanel.css';
 
 import PathInfo from './PathInfo';
@@ -11,6 +11,70 @@ import {
     ROAD_WEIGHT_FIELDS,
     ROAD_WEIGHT_PRESETS,
 } from '../../utils/roadWeights';
+
+function formatOptional(value, fallback) {
+    if (value == null || value === '') return `default (${fallback})`;
+    return String(value);
+}
+
+function roadWeightLabel(settings) {
+    const preset = ROAD_WEIGHT_PRESETS.find((item) => item.id === settings.road_weight_preset);
+    if (preset) return preset.label;
+    const weights = settings.road_weights || {};
+    const changed = ROAD_WEIGHT_FIELDS
+        .filter(([key]) => weights[key] != null && Number(weights[key]) !== DEFAULT_ROAD_WEIGHTS[key])
+        .map(([key, label]) => `${label} ${weights[key]}`);
+    return changed.length > 0 ? changed.join(', ') : 'Custom';
+}
+
+function generationRows(generation) {
+    const settings = generation.settings || {};
+    const algorithmId = String(settings.algorithm || '');
+    const usesCap = algorithmId.endsWith('_capped') || algorithmId === 'pleasant_explore';
+    const isTree = algorithmId.startsWith('tree_') || algorithmId === 'loop_atlas';
+    const usesExplore = algorithmId === 'pleasant_explore' || isTree;
+    const rows = [
+        ['Algorithm', generation.algorithmLabel || algorithmId || '—'],
+        ['Graph', generation.graph || '—'],
+    ];
+    if (generation.markerPosition?.lat != null && generation.markerPosition?.lng != null) {
+        const { lat, lng } = generation.markerPosition;
+        rows.push(['Start', `${Number(lat).toFixed(4)}, ${Number(lng).toFixed(4)}`]);
+    }
+    rows.push(
+        ['Min distance', `${settings.min_path_len ?? '—'} mi`],
+        ['Max distance', `${settings.max_path_len ?? '—'} mi`],
+        ['Loop percentage', settings.loop_ratio == null ? '—' : `${Math.round(Number(settings.loop_ratio) * 100)}%`],
+        ['Paths requested', settings.num_paths ?? '—'],
+        ['Paths found', generation.isComplete ? String(generation.pathCount) : `${generation.pathCount} so far`],
+    );
+    if (settings.deduplication === 'jaccard') {
+        rows.push(['Dedup', `Jaccard ${settings.sim_ceiling}`]);
+    } else {
+        rows.push(['Dedup', `Centroid ${settings.min_dist_m ?? 50} m`]);
+    }
+    if (usesCap) rows.push(['Cap per node/bucket', settings.cap_k ?? 3]);
+    if (usesExplore) rows.push(['Explore weight', formatOptional(settings.explore_weight, isTree ? 2 : 1)]);
+    if (isTree) {
+        rows.push(['Detour cost', formatOptional(settings.detour_weight, 0.3)]);
+        rows.push(['Reuse penalty', formatOptional(settings.reuse_weight, 1)]);
+    }
+    rows.push(['Road weights', roadWeightLabel(settings)]);
+    rows.push(['Soften busy roads', settings.rural_scale === false ? 'Off' : 'On']);
+    if (settings.debug_snapshots) {
+        rows.push(['Snapshots', `every ${settings.snapshot_every || 25000} pops`]);
+    }
+    return rows;
+}
+
+function generationOptionLabel(generation, generations) {
+    const sharedName = generations.filter((item) => item.name === generation.name).length > 1;
+    const title = sharedName && generation.algorithmLabel
+        ? `${generation.name} · ${generation.algorithmLabel}`
+        : generation.name;
+    const count = generation.isComplete ? generation.pathCount : `${generation.pathCount}…`;
+    return `${title} (${count})`;
+}
 
 const SECTION_KEYS = ['tools', 'view', 'sort', 'filters', 'details'];
 const SECTION_LABELS = {
@@ -95,6 +159,19 @@ function ControlPanel({
     setPrimaryColor,
     showGraphNodes,
     setShowGraphNodes,
+    generations = [],
+    compareA = null,
+    compareB = null,
+    compareMode = 'intersection',
+    setCompareA,
+    setCompareB,
+    setCompareMode,
+    swapCompare,
+    onNewGeneration,
+    generationName = '',
+    setGenerationName,
+    namePlaceholder = '',
+    comparedCount = 0,
 }) {
     const [filterPickerOpen, setFilterPickerOpen] = useState(false);
     const activeFilterKeys = new Set((routeFilters || []).map((filter) => filter.key));
@@ -108,6 +185,7 @@ function ControlPanel({
             debug: true,
             view: true,
             filters: false,
+            runs: false,
         };
         try {
             const saved = JSON.parse(localStorage.getItem('panelSections') || '{}');
@@ -143,9 +221,9 @@ function ControlPanel({
     const sectionVisible = {
         tools: mode === 'display',
         view: true,
-        sort: hasActivePathSet,
-        filters: hasActivePathSet,
-        details: !!currentPath || hasActivePathSet,
+        sort: mode === 'display' && hasActivePathSet,
+        filters: mode === 'display' && hasActivePathSet,
+        details: mode === 'display' && hasActivePathSet,
     };
 
     const saveSectionOrder = (next) => {
@@ -243,6 +321,16 @@ function ControlPanel({
         setGenSettings(prev => ({ ...prev, [name]: Number.isFinite(num) && num >= 0 ? num : null }));
     };
 
+    const bothSelected = !!(compareA && compareB);
+    const selectedA = generations.find((item) => item.id === compareA) || null;
+    const selectedB = generations.find((item) => item.id === compareB) || null;
+    let emptyPathsMessage = 'No paths match your filters';
+    if (comparedCount === 0) {
+        emptyPathsMessage = bothSelected
+            ? (compareMode === 'difference' ? 'No routes are only in A' : 'No routes are in both')
+            : 'No paths yet';
+    }
+
     return (
         <div className="control-panel">
             {/* Header with navigation - only show in display mode */}
@@ -329,6 +417,13 @@ function ControlPanel({
                             <ChevronsRight size={18} />
                         </button>
                     </div>
+                    <button
+                        type="button"
+                        className="control-panel__back"
+                        onClick={onNewGeneration}
+                    >
+                        New generation
+                    </button>
                 </div>
             )}
 
@@ -373,6 +468,18 @@ function ControlPanel({
                             />
                             {!collapsed.generation && (
                             <div className="settings-grid">
+                                <label className="setting-item full-width">
+                                    <span>Name</span>
+                                    <input
+                                        type="text"
+                                        value={generationName}
+                                        placeholder={namePlaceholder}
+                                        maxLength={80}
+                                        autoComplete="off"
+                                        onChange={(e) => setGenerationName(e.target.value)}
+                                    />
+                                    <span className="field-hint">Leave blank to use the algorithm name. This name is what the display lists use.</span>
+                                </label>
                                 <label className="setting-item">
                                     <span>Min Path Distance</span>
                                     <input
@@ -610,6 +717,97 @@ function ControlPanel({
                         </div>
                     )}
 
+                    {mode === 'display' && generations.length > 0 && (
+                        <div className="control-panel__section compare-block">
+                            <div className="compare-row">
+                                <span className="compare-row__label">A</span>
+                                <select
+                                    className="control-panel__select"
+                                    aria-label="Generation A"
+                                    value={compareA || ''}
+                                    onChange={(e) => setCompareA(e.target.value)}
+                                >
+                                    <option value="">None</option>
+                                    {generations.filter((item) => item.id !== compareB).map((item) => (
+                                        <option key={item.id} value={item.id}>
+                                            {generationOptionLabel(item, generations)}
+                                        </option>
+                                    ))}
+                                </select>
+                                <span className="compare-swap-spacer" aria-hidden="true" />
+                            </div>
+                            <div className="compare-row">
+                                <span className="compare-row__label">B</span>
+                                <select
+                                    className="control-panel__select"
+                                    aria-label="Generation B"
+                                    value={compareB || ''}
+                                    onChange={(e) => setCompareB(e.target.value)}
+                                >
+                                    <option value="">None</option>
+                                    {generations.filter((item) => item.id !== compareA).map((item) => (
+                                        <option key={item.id} value={item.id}>
+                                            {generationOptionLabel(item, generations)}
+                                        </option>
+                                    ))}
+                                </select>
+                                <button
+                                    type="button"
+                                    className="compare-swap"
+                                    onClick={swapCompare}
+                                    disabled={!compareA && !compareB}
+                                    title="Swap A and B"
+                                    aria-label="Swap A and B"
+                                >
+                                    <ArrowLeftRight size={14} />
+                                    Swap
+                                </button>
+                            </div>
+                            <div className="compare-modes" role="group" aria-label="How to combine the two generations">
+                                <button
+                                    type="button"
+                                    className={compareMode === 'intersection' ? 'is-active' : ''}
+                                    disabled={!bothSelected}
+                                    onClick={() => setCompareMode('intersection')}
+                                    title={bothSelected ? 'Routes in both generations' : 'Choose a generation in both A and B'}
+                                >
+                                    Intersection
+                                </button>
+                                <button
+                                    type="button"
+                                    className={compareMode === 'difference' ? 'is-active' : ''}
+                                    disabled={!bothSelected}
+                                    onClick={() => setCompareMode('difference')}
+                                    title={bothSelected ? 'Routes in A that are not in B' : 'Choose a generation in both A and B'}
+                                >
+                                    Difference
+                                </button>
+                            </div>
+                            {bothSelected && (
+                                <p className="compare-hint">
+                                    {compareMode === 'difference'
+                                        ? `${comparedCount} ${comparedCount === 1 ? 'route' : 'routes'} only in A.`
+                                        : `${comparedCount} ${comparedCount === 1 ? 'route' : 'routes'} in both.`}
+                                    {' '}Same roads count as one route.
+                                </p>
+                            )}
+                            <SectionToggle
+                                title="Run details"
+                                collapsed={collapsed.runs}
+                                onToggle={() => toggleSection('runs')}
+                            />
+                            {!collapsed.runs && (
+                                <div className="run-details-list">
+                                    {selectedA && <RunDetails heading="A" generation={selectedA} />}
+                                    {selectedB && <RunDetails heading="B" generation={selectedB} />}
+                                    {!selectedA && !selectedB && (
+                                        <p className="compare-hint">Choose a generation to see its settings.</p>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                     {/* Drawing Tools - Only show in display mode */}
                     {sectionVisible.tools && (
                         <ReorderableSection {...sectionProps('tools')}>
@@ -734,7 +932,7 @@ function ControlPanel({
                         )}
                     </ReorderableSection>
 
-                    {hasActivePathSet && (
+                    {sectionVisible.sort && (
                         <>
                             <ReorderableSection {...sectionProps('sort')}>
                                 <div className="control-panel__section-title">Sort By</div>
@@ -852,7 +1050,7 @@ function ControlPanel({
                             ) : (
                                 <div className="control-panel__empty">
                                     <div className="control-panel__empty-text">
-                                        No paths match your filters
+                                        {emptyPathsMessage}
                                     </div>
                                 </div>
                             )}
@@ -910,6 +1108,20 @@ function ReorderableSection({
                 <GripVertical size={12} />
             </button>
             {children}
+        </div>
+    );
+}
+
+function RunDetails({ heading, generation }) {
+    return (
+        <div className="run-details">
+            <div className="run-details__name">{heading} · {generation.name}</div>
+            {generationRows(generation).map(([label, value]) => (
+                <div key={label} className="run-details__row">
+                    <span>{label}</span>
+                    <span>{value}</span>
+                </div>
+            ))}
         </div>
     );
 }

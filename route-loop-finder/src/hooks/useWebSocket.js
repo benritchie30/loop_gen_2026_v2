@@ -66,9 +66,10 @@ export function useWebSocket(url = 'ws://localhost:8765') {
       const message = { type, ...payload };
       ws.current.send(JSON.stringify(message));
       console.log('[WebSocket] Sent:', message);
-    } else {
-      console.warn('[WebSocket] Cannot send message - not connected');
+      return true;
     }
+    console.warn('[WebSocket] Cannot send message - not connected');
+    return false;
   }, []);
 
   const subscribe = useCallback((handler) => {

@@ -31,7 +31,7 @@ const createMarkerIcon = (color) => {
 /**
  * Reusable marker component with configurable colors.
  */
-function PathMarker({ position, color = 'inactive', onClick }) {
+function PathMarker({ position, color = 'inactive', onClick, title, zIndexOffset = 0 }) {
     const icon = useMemo(() => createMarkerIcon(color), [color]);
 
     // Handle both { lat, lng } and [lat, lng] formats
@@ -53,6 +53,8 @@ function PathMarker({ position, color = 'inactive', onClick }) {
         <Marker
             position={markerPosition}
             icon={icon}
+            title={title || undefined}
+            zIndexOffset={zIndexOffset}
             eventHandlers={eventHandlers}
         />
     );

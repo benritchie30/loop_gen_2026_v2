@@ -1,6 +1,19 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { FILTER_METRICS, OPEN_RANGE, filterByMetrics, metricBounds, sanitizeRouteFilters, sortPaths } from '../utils/pathFiltering';
-import { filterByRouteSelections } from '../utils/routeSelections';
+import { filterByRouteSelections, routesSharingGround } from '../utils/routeSelections';
+
+/** Next unused label, so a blank name still tells two runs of the same algorithm apart. */
+export function suggestGenerationName(base, pathSets) {
+    const used = new Set();
+    Object.values(pathSets || {}).forEach((set) => {
+        if (set?.name) used.add(set.name);
+    });
+    const label = base || 'Generation';
+    if (!used.has(label)) return label;
+    let n = 2;
+    while (used.has(`${label} ${n}`)) n += 1;
+    return `${label} ${n}`;
+}
 
 /**
  * Manages all path set state - the core data store for the application.
@@ -9,7 +22,8 @@ import { filterByRouteSelections } from '../utils/routeSelections';
 export function usePathSets() {
     // Map of pathSetId -> { markerPosition, paths: [] }
     const [pathSets, setPathSets] = useState({});
-    const [activePathSetId, setActivePathSetId] = useState(null);
+    // A and B are generation ids. mode is how two selected runs combine.
+    const [compare, setCompare] = useState({ a: null, b: null, mode: 'intersection' });
     const [selectedPathId, setSelectedPathId] = useState(null);
     const [routeFilters, setRouteFilters] = useState(() => {
         try {
@@ -75,17 +89,28 @@ export function usePathSets() {
     // drawnSelections: { id, type: 'include'|'exclude', shape, geometry }
     const [drawnSelections, setDrawnSelections] = useState([]);
 
-    // Create a new path set when generation starts
-    const createPathSet = useCallback((pathSetId, markerPosition) => {
+    // Create a new path set when generation starts. meta is the name and settings snapshot.
+    const createPathSet = useCallback((pathSetId, markerPosition, meta) => {
+        const info = meta || {};
+        const settings = info.settings || {};
         setPathSets(prev => ({
             ...prev,
             [pathSetId]: {
                 markerPosition,
                 paths: [],
-                isComplete: false
+                isComplete: false,
+                name: info.name || 'Generation',
+                graph: info.graph || '',
+                algorithmLabel: info.algorithmLabel || settings.algorithm || 'Generation',
+                settings,
+                createdAt: Date.now()
             }
         }));
-        setActivePathSetId(pathSetId);
+        setCompare(prev => ({
+            ...prev,
+            a: pathSetId,
+            b: prev.b === pathSetId ? null : prev.b
+        }));
         setSelectedPathId(null);
         setDrawnSelections([]);
     }, []);
@@ -130,18 +155,53 @@ export function usePathSets() {
         });
     }, []);
 
-    // Select a path set to display
+    // Open a generation as set A. Clicking the generation already in B swaps them.
     const selectPathSet = useCallback((pathSetId) => {
         setDrawnSelections([]);
+        setSelectedPathId(null);
         if (!pathSetId) {
-            setActivePathSetId(null);
+            setCompare(prev => ({ ...prev, a: null }));
             return;
         }
-        if (pathSets[pathSetId]) {
-            setActivePathSetId(pathSetId);
-            setSelectedPathId(null);
-        }
+        setCompare(prev => {
+            if (!pathSets[pathSetId]) return prev;
+            if (prev.b === pathSetId) {
+                return { ...prev, a: pathSetId, b: prev.a === pathSetId ? null : prev.a };
+            }
+            return { ...prev, a: pathSetId };
+        });
     }, [pathSets]);
+
+    const setCompareA = useCallback((id) => {
+        const next = id || null;
+        setCompare(prev => ({
+            ...prev,
+            a: next,
+            b: next && next === prev.b ? null : prev.b
+        }));
+        setDrawnSelections([]);
+        setSelectedPathId(null);
+    }, []);
+
+    const setCompareB = useCallback((id) => {
+        const next = id || null;
+        setCompare(prev => ({
+            ...prev,
+            b: next,
+            a: next && next === prev.a ? null : prev.a
+        }));
+        setDrawnSelections([]);
+        setSelectedPathId(null);
+    }, []);
+
+    const setCompareMode = useCallback((mode) => {
+        if (mode !== 'intersection' && mode !== 'difference') return;
+        setCompare(prev => (prev.mode === mode ? prev : { ...prev, mode }));
+    }, []);
+
+    const swapCompare = useCallback(() => {
+        setCompare(prev => ({ ...prev, a: prev.b, b: prev.a }));
+    }, []);
 
     // Add a drawn selection for filtering
     const addDrawnSelection = useCallback((selectionData) => {
@@ -172,28 +232,60 @@ export function usePathSets() {
         setSelectedPathId(null);
     }, []);
 
+    const compareA = compare.a && pathSets[compare.a] ? compare.a : null;
+    const compareB = compare.b && pathSets[compare.b] ? compare.b : null;
+    const compareMode = compare.mode === 'difference' ? 'difference' : 'intersection';
+    // One selected run is shown whole. Two runs combine from A's point of view.
+    const sourceId = compareA && compareB ? compareA : (compareA || compareB);
+
+    const comparedPaths = useMemo(() => {
+        const setA = compareA ? pathSets[compareA] : null;
+        const setB = compareB ? pathSets[compareB] : null;
+        if (setA && setB) {
+            const { shared, only } = routesSharingGround(setA.paths, setB.paths);
+            return compareMode === 'difference' ? only : shared;
+        }
+        if (setA) return setA.paths;
+        if (setB) return setB.paths;
+        return [];
+    }, [pathSets, compareA, compareB, compareMode]);
+
+    const generations = useMemo(() => {
+        return Object.entries(pathSets)
+            .map(([id, set]) => ({
+                id,
+                name: set.name || 'Generation',
+                algorithmLabel: set.algorithmLabel || '',
+                graph: set.graph || '',
+                settings: set.settings || {},
+                markerPosition: set.markerPosition,
+                pathCount: set.paths.length,
+                isComplete: !!set.isComplete,
+                createdAt: set.createdAt || 0
+            }))
+            .sort((a, b) => a.createdAt - b.createdAt || a.name.localeCompare(b.name));
+    }, [pathSets]);
+
     // Get the active path set
-    const activePathSet = useMemo(() => {
-        return activePathSetId ? pathSets[activePathSetId] : null;
-    }, [pathSets, activePathSetId]);
+    const activePathSet = sourceId ? pathSets[sourceId] : null;
 
     const filterBounds = useMemo(() => {
         const bounds = {};
         FILTER_METRICS.forEach((metric) => {
-            bounds[metric.key] = metricBounds(activePathSet?.paths, metric);
+            bounds[metric.key] = metricBounds(comparedPaths, metric);
         });
         return bounds;
-    }, [activePathSet]);
+    }, [comparedPaths]);
 
     // Get filtered paths based on distance, drawn selections, and dropped pins
     const filteredPaths = useMemo(() => {
-        if (!activePathSet?.paths?.length) return [];
+        if (!comparedPaths.length) return [];
 
-        let paths = activePathSet.paths;
+        let paths = comparedPaths;
         paths = filterByMetrics(paths, routeFilters);
         paths = filterByRouteSelections(paths, drawnSelections);
         return sortPaths(paths, sortBy, sortAscending);
-    }, [activePathSet, routeFilters, drawnSelections, sortBy, sortAscending]);
+    }, [comparedPaths, routeFilters, drawnSelections, sortBy, sortAscending]);
 
 
 
@@ -289,17 +381,18 @@ export function usePathSets() {
     const pathSetMarkers = useMemo(() => {
         return Object.entries(pathSets).map(([id, pathSet]) => ({
             id,
+            name: pathSet.name || 'Generation',
             position: pathSet.markerPosition,
-            isActive: id === activePathSetId,
+            isActive: id === sourceId,
             pathCount: pathSet.paths.length
         }));
-    }, [pathSets, activePathSetId]);
+    }, [pathSets, sourceId]);
 
     const reverseCurrentPathProfile = useCallback(() => {
-        if (!activePathSetId || !currentPath) return;
+        if (!sourceId || !currentPath) return;
 
         setPathSets(prev => {
-            const pathSet = prev[activePathSetId];
+            const pathSet = prev[sourceId];
             if (!pathSet) return prev;
 
             const paths = [...pathSet.paths];
@@ -337,22 +430,27 @@ export function usePathSets() {
 
             return {
                 ...prev,
-                [activePathSetId]: {
+                [sourceId]: {
                     ...pathSet,
                     paths: paths
                 }
             };
         });
-    }, [activePathSetId, currentPath]);
+    }, [sourceId, currentPath]);
 
     return {
         // State
         pathSets,
-        activePathSetId,
+        activePathSetId: sourceId,
         activePathSet,
         currentPathIndex,
         currentPath,
         filteredPaths,
+        comparedCount: comparedPaths.length,
+        generations,
+        compareA,
+        compareB,
+        compareMode,
         routeFilters,
         filterBounds,
         sortBy,
@@ -365,6 +463,10 @@ export function usePathSets() {
         addPathToSet,
         completePathSet,
         selectPathSet,
+        setCompareA,
+        setCompareB,
+        setCompareMode,
+        swapCompare,
         addDrawnSelection,
         clearDrawnSelections,
         undoLastSelection,

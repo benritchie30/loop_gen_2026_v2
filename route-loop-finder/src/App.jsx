@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useState, useRef } from 'react';
+import { useEffect, useCallback, useState, useRef, useMemo } from 'react';
 import { Activity } from 'lucide-react';
 import './App.css';
 
@@ -6,7 +6,7 @@ import { MapView } from './components/MapView';
 import { ControlPanel } from './components/ControlPanel';
 import ElevationProfileWindow from './components/ElevationProfileWindow';
 import { useWebSocket } from './hooks/useWebSocket';
-import { usePathSets } from './hooks/usePathSets';
+import { usePathSets, suggestGenerationName } from './hooks/usePathSets';
 import { normalizeRoadWeights, DEFAULT_ROAD_WEIGHTS } from './utils/roadWeights';
 import { useAppMode } from './hooks/useAppMode';
 
@@ -110,10 +110,18 @@ function App() {
     pathSets,
     pathSetMarkers,
     activePathSetId,
-    activePathSet,
     currentPath,
     currentPathIndex,
     filteredPaths,
+    comparedCount,
+    generations,
+    compareA,
+    compareB,
+    compareMode,
+    setCompareA,
+    setCompareB,
+    setCompareMode,
+    swapCompare,
     routeFilters,
     filterBounds,
     sortBy,
@@ -153,6 +161,7 @@ function App() {
   const [isElevationMinimized, setIsElevationMinimized] = useState(false);
   const [hoveredPoint, setHoveredPoint] = useState(null);
   const draftingRef = useRef(null);
+  const pendingGenerations = useRef([]);
 
   const [viewOptions, setViewOptions] = useState(readViewOptions);
   const {
@@ -237,7 +246,11 @@ function App() {
 
       switch (message.type) {
         case 'PATHSET_CREATED':
-          createPathSet(message.pathSetId, message.markerPosition);
+          createPathSet(
+            message.pathSetId,
+            message.markerPosition,
+            pendingGenerations.current.shift() || null
+          );
           setMode('display');
           break;
 
@@ -412,10 +425,48 @@ function App() {
     }
   });
 
+  const [generationName, setGenerationName] = useState('');
+
+  const namePlaceholder = useMemo(() => {
+    const algorithmId = genSettings.algorithm || 'turns';
+    const algorithmLabel = algorithms.find((item) => item.id === algorithmId)?.label || algorithmId;
+    return suggestGenerationName(algorithmLabel, pathSets);
+  }, [genSettings.algorithm, algorithms, pathSets]);
+
   // Save settings to localStorage whenever they change
   useEffect(() => {
     localStorage.setItem('generatorSettings', JSON.stringify(genSettings));
   }, [genSettings]);
+
+  const startGeneration = useCallback(() => {
+    if (mode !== 'input' || !pendingMarker) return;
+    const algorithmId = genSettings.algorithm || 'turns';
+    const algorithmLabel = algorithms.find((item) => item.id === algorithmId)?.label || algorithmId;
+    const name = generationName.trim() || suggestGenerationName(algorithmLabel, pathSets);
+    const settings = structuredClone(genSettings);
+    const sent = sendMessage('START_GENERATION', {
+      lat: pendingMarker.lat,
+      lng: pendingMarker.lng,
+      ...genSettings
+    });
+    if (!sent) return;
+    pendingGenerations.current.push({
+      name,
+      graph: activeGraph || '',
+      algorithmLabel,
+      settings
+    });
+    setGenerationName('');
+    localStorage.setItem('lastMapPosition', JSON.stringify({
+      center: [pendingMarker.lat, pendingMarker.lng],
+      zoom: 13
+    }));
+  }, [mode, pendingMarker, genSettings, algorithms, generationName, pathSets, activeGraph, sendMessage]);
+
+  const handleNewGeneration = useCallback(() => {
+    setActiveTool(null);
+    setMode('input');
+  }, [setMode]);
 
 
 
@@ -472,17 +523,8 @@ function App() {
       }
 
       // Input Mode: Enter to start generation
-      if (e.key === 'Enter' && mode === 'input' && pendingMarker) {
-        // ... existing input mode logic ...
-        sendMessage('START_GENERATION', {
-          lat: pendingMarker.lat,
-          lng: pendingMarker.lng,
-          ...genSettings
-        });
-        localStorage.setItem('lastMapPosition', JSON.stringify({
-          center: [pendingMarker.lat, pendingMarker.lng],
-          zoom: 13
-        }));
+      if (e.key === 'Enter' && mode === 'input') {
+        startGeneration();
       }
 
       // Graph Create Mode: Enter to create graph
@@ -527,11 +569,10 @@ function App() {
           if (isGenerating) handleStopGeneration();
         }
 
-        // Backspace: Return to Input Mode
+        // Backspace: return to input and keep every generation
         if (e.key === 'Backspace') {
-          selectPathSet(null);
-          setMode('input');
-          setActiveTool(null);
+          e.preventDefault();
+          handleNewGeneration();
         }
 
         // Arrow keys: page through paths
@@ -572,7 +613,7 @@ function App() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [mode, pendingMarker, sendMessage, selectPathSet, setMode, undoLastSelection, genSettings, graphBounds, isCreatingGraph, nextPath, prevPath, activeTool, setIsElevationMinimized, graphCreateMode, handleCreateGraph, handleCancelGraphCreate, exclusionZones, setIsDrawingExclusion, isGenerating, handleStopGeneration]);
+  }, [mode, startGeneration, handleNewGeneration, undoLastSelection, graphBounds, isCreatingGraph, nextPath, prevPath, activeTool, setIsElevationMinimized, graphCreateMode, handleCreateGraph, handleCancelGraphCreate, exclusionZones, setIsDrawingExclusion, isGenerating, handleStopGeneration]);
 
   // Auto-show elevation window when path with elevation data is selected
   // Auto-show elevation window when path with elevation data is selected
@@ -616,6 +657,7 @@ function App() {
         pendingMarker={pendingMarker}
         pathSetMarkers={pathSetMarkers}
         activePathSetId={activePathSetId}
+        visiblePathSetIds={[compareA, compareB].filter(Boolean)}
         currentPath={currentPath}
         filteredPaths={filteredPaths}
         drawnSelections={drawnSelections}
@@ -657,7 +699,20 @@ function App() {
         currentPath={currentPath}
         currentPathIndex={currentPathIndex}
         filteredPathsCount={filteredPaths.length}
-        totalPathsCount={activePathSet?.paths?.length || 0}
+        totalPathsCount={comparedCount}
+        generations={generations}
+        compareA={compareA}
+        compareB={compareB}
+        compareMode={compareMode}
+        setCompareA={setCompareA}
+        setCompareB={setCompareB}
+        setCompareMode={setCompareMode}
+        swapCompare={swapCompare}
+        onNewGeneration={handleNewGeneration}
+        generationName={generationName}
+        setGenerationName={setGenerationName}
+        namePlaceholder={namePlaceholder}
+        comparedCount={comparedCount}
         routeFilters={routeFilters}
         filterBounds={filterBounds}
         setFilterRange={setFilterRange}
@@ -718,7 +773,7 @@ function App() {
       />
 
       {/* Elevation Window & Toggle */}
-      {currentPath?.properties?.elevation_profile?.length > 1 && (
+      {mode === 'display' && currentPath?.properties?.elevation_profile?.length > 1 && (
         <>
           {/* Minimized toggle button */}
           {isElevationMinimized && (

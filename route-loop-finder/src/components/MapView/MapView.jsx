@@ -27,6 +27,7 @@ function MapView({
     pendingMarker,
     pathSetMarkers,
     activePathSetId,
+    visiblePathSetIds,
     currentPath,
     filteredPaths,
     drawnSelections,
@@ -284,7 +285,8 @@ function MapView({
                     - In 'display' mode: Show ONLY the active marker (green/active).
                 */}
                 {pathSetMarkers.map(marker => {
-                    const shouldShow = mode === 'input' || (mode === 'display' && marker.id === activePathSetId);
+                    const pinned = (visiblePathSetIds || []).includes(marker.id);
+                    const shouldShow = mode === 'input' || (mode === 'display' && (pinned || marker.id === activePathSetId));
 
                     if (!shouldShow) return null;
 
@@ -293,6 +295,8 @@ function MapView({
                             key={marker.id}
                             position={marker.position}
                             color={marker.isActive ? 'active' : 'inactive'}
+                            title={marker.name}
+                            zIndexOffset={marker.isActive ? 500 : 0}
                             onClick={() => onMarkerClick(marker.id)}
                         />
                     );

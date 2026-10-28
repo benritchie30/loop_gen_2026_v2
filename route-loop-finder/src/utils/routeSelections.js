@@ -9,6 +9,9 @@ const M_PER_DEG = 111320;
 
 const sampleCache = new WeakMap();
 const cellCache = new WeakMap();
+const signatureCache = new WeakMap();
+// One grid for every run, so two generations can share a cell id.
+const MATCH_COS = Math.cos((35 * Math.PI) / 180);
 
 export function metersBetween(lat1, lng1, lat2, lng2) {
     const midLat = ((lat1 + lat2) * 0.5 * Math.PI) / 180;
@@ -122,6 +125,44 @@ function cellsFor(path) {
     }
     cellCache.set(path, cells);
     return cells;
+}
+
+/** Roads shared by a route, as sorted 80 m cells. Empty when the route has no samples. */
+export function routeSignature(path) {
+    const cached = signatureCache.get(path);
+    if (cached !== undefined) return cached;
+
+    const samples = pathSamples(path);
+    const cells = new Set();
+    for (let i = 0; i < samples.length; i += 2) {
+        const x = Math.round((samples[i + 1] * M_PER_DEG * MATCH_COS) / CELL_M);
+        const y = Math.round((samples[i] * M_PER_DEG) / CELL_M);
+        cells.add(`${x},${y}`);
+    }
+    const signature = cells.size ? Array.from(cells).sort().join('|') : '';
+    signatureCache.set(path, signature);
+    return signature;
+}
+
+/**
+ * Split source routes into those that cover the same roads as some other route,
+ * and those that do not. Matching is the 80 m cell set, so direction does not matter.
+ */
+export function routesSharingGround(sourcePaths, otherPaths) {
+    const other = new Set();
+    for (let i = 0; i < otherPaths.length; i++) {
+        const signature = routeSignature(otherPaths[i]);
+        if (signature) other.add(signature);
+    }
+    const shared = [];
+    const only = [];
+    for (let i = 0; i < sourcePaths.length; i++) {
+        const path = sourcePaths[i];
+        const signature = routeSignature(path);
+        if (signature && other.has(signature)) shared.push(path);
+        else only.push(path);
+    }
+    return { shared, only };
 }
 
 function jaccard(a, b) {
