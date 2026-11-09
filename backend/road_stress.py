@@ -70,6 +70,21 @@ _LINK_PARENT = {
 }
 
 
+# Road preference (the Roads choice in the UI): scales every busy-road class.
+# 'balanced' is the built-in table. The rural softening still applies on top.
+PREFERENCE_SCALE = {'quiet': 2.0, 'balanced': 1.0, 'any': 0.4}
+
+
+def preference_weights(preference):
+    """Class -> turns-per-mile overrides for a road preference, or None for the
+    built-in table ('balanced' or unknown). Links follow their parent class."""
+    scale = PREFERENCE_SCALE.get(str(preference or '').lower())
+    if scale is None or scale == 1.0:
+        return None
+    return {cls: w * scale for cls, w in _TURNS_PER_MILE.items()
+            if cls not in _LINK_PARENT and w > 0}
+
+
 def resolve_turns_per_mile(overrides):
     """Built-in table, or that table with request overrides applied.
 
@@ -179,7 +194,15 @@ def annotate_edge_stress(G, turns_per_mile=None, rural=True):
     """
     table = resolve_turns_per_mile(turns_per_mile)
     for _u, _v, _k, data in G.edges(keys=True, data=True):
-        data['stress'] = edge_stress(data, table)
+        parts = data.get('parts')
+        if parts:
+            # Merged road (graph_builder): length-weighted over its pieces, so a
+            # short busy stretch inside a merged edge still counts.
+            total = sum(length for length, _tags in parts)
+            data['stress'] = (sum(edge_stress(tags, table) * length for length, tags in parts) / total
+                              if total > 0 else 0.0)
+        else:
+            data['stress'] = edge_stress(data, table)
 
     if not rural:
         return G

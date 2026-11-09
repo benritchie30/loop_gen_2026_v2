@@ -1,0 +1,5 @@
+# Tools in tools/ (not needed to run the app)
+-r requirements.txt
+Pillow        # bench_search.py --png
+playwright    # check_ui.py; then: python -m playwright install chromium
+psutil        # tools/check_load.py: the server's memory (optional on Linux)

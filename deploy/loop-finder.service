@@ -1,0 +1,60 @@
+# The Python backend as a system service (installed as
+# /etc/systemd/system/loop-finder.service by setup.sh). systemd starts it at boot
+# and restarts it if it stops or runs out of memory.
+#
+#   systemctl status loop-finder        is it running, memory use
+#   journalctl -u loop-finder -f        its output (follow)
+#   systemctl restart loop-finder       after changing /etc/loop-finder.env
+
+[Unit]
+Description=Loop Finder backend (route search over WebSocket)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=loop-finder
+Group=loop-finder
+WorkingDirectory=/opt/loop-finder/backend
+ExecStart=/opt/loop-finder/venv/bin/python server.py
+# Settings: LOOP_ALLOWED_ORIGINS, LOOP_CONTACT, limits (see RUNNING.md).
+EnvironmentFile=/etc/loop-finder.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+# Fewer glibc memory arenas: the worker threads otherwise keep freed memory.
+Environment=MALLOC_ARENA_MAX=2
+# Map tiles and the SRTM elevation cache (~/.cache/srtm) live here.
+Environment=HOME=/var/lib/loop-finder
+StateDirectory=loop-finder
+
+Restart=always
+RestartSec=3
+# On a 4 GB server: slow down (reclaim) above 2.5 GB, stop and restart above 3 GB,
+# leaving room for the system and Caddy. Visitors reconnect by themselves and their
+# generations are rebuilt from their browsers.
+MemoryHigh=2500M
+MemoryMax=3G
+
+# The service can only write its own data folder.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictNamespaces=yes
+RestrictRealtime=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target

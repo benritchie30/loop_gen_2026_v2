@@ -12,6 +12,15 @@ backend/cache/
 backend/simp_debug/
 backend/search_debug/
 backend/bench_out/
+backend/probe_out/
+backend/check_server.log
+backend/map_data/
+backend/check_ui.log
+backend/check_limits.log
+backend/check_load.log
+backend/check_ui_out/
+backend/check_frontend_out/
+backend/wheels/
 backend/.env
 
 # JavaScript/Node

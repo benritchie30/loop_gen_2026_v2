@@ -26,53 +26,24 @@ export const ROAD_WEIGHT_FIELDS = [
     ['trunk', 'Trunk'],
 ];
 
-const withDefaults = (overrides) => ({ ...DEFAULT_ROAD_WEIGHTS, ...overrides });
-
-export const ROAD_WEIGHT_PRESETS = [
-    {
-        id: 'current',
-        label: 'Current',
-        rural_scale: true,
-        weights: withDefaults({}),
-    },
-    {
-        id: 'charlotte_cycle',
-        label: 'Charlotte cycle',
-        rural_scale: false,
-        weights: withDefaults({
-            unclassified: 0.25,
-            tertiary: 1.5,
-            secondary: 2.5,
-            primary: 6,
-            trunk: 12,
-        }),
-    },
-    {
-        id: 'charlotte_strict',
-        label: 'Charlotte strict',
-        rural_scale: false,
-        weights: withDefaults({
-            unclassified: 1,
-            tertiary: 3,
-            secondary: 5,
-            primary: 8,
-            trunk: 16,
-        }),
-    },
-    {
-        id: 'rural',
-        label: 'Rural',
-        rural_scale: false,
-        weights: withDefaults({
-            residential: 0.5,
-            unclassified: 0,
-            tertiary: 0,
-            secondary: 0.5,
-            primary: 2,
-            trunk: 6,
-        }),
-    },
+/**
+ * Roads choice -> multiplier on every busy-road class (same as the server's
+ * road_stress.PREFERENCE_SCALE). 'custom' uses the Advanced table as is.
+ */
+export const ROAD_PREFERENCES = [
+    { id: 'quiet', label: 'Quiet', scale: 2, short: 'Stays off busy roads', hint: 'Stays off busy roads, even if the loop has more turns.' },
+    { id: 'balanced', label: 'Balanced', scale: 1, short: 'Busy roads only when much shorter', hint: 'Avoids busy roads when a quiet way is not much longer.' },
+    { id: 'any', label: 'Any', scale: 0.4, short: 'Busy roads are fine', hint: 'Takes busy roads when they make a simpler loop.' },
 ];
+
+/** Weights a Roads choice uses (for showing in the Advanced table). */
+export function weightsForPreference(preference, custom) {
+    if (preference === 'custom') return normalizeRoadWeights(custom);
+    const scale = ROAD_PREFERENCES.find((p) => p.id === preference)?.scale ?? 1;
+    const out = {};
+    Object.entries(DEFAULT_ROAD_WEIGHTS).forEach(([key, w]) => { out[key] = Math.round(w * scale * 100) / 100; });
+    return out;
+}
 
 export function normalizeRoadWeights(saved) {
     const weights = { ...DEFAULT_ROAD_WEIGHTS };
