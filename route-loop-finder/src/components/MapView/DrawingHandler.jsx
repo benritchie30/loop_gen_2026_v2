@@ -1,12 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Circle, Polygon, Rectangle, useMap } from 'react-leaflet';
-import {
-    metersBetween,
-    MIN_DRAG_M,
-    POINT_RADIUS_M,
-    snapToRoutes,
-    snapToleranceMeters,
-} from '../../utils/routeSelections';
+import { metersBetween, MIN_DRAG_M } from '../../utils/routeSelections';
+import { edgesInShape } from '../../utils/graphRoads';
+import { metersPerPixel } from '../../utils/routeHover';
+import { AREA_STYLE } from '../../utils/roadColors';
 
 function newId() {
     return `sel-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -38,33 +35,14 @@ function thinCoordinates(latlngs) {
     return out;
 }
 
-const DRAFT_STYLE = {
-    color: '#6e8cae',
-    weight: 2,
-    opacity: 0.9,
-    dashArray: '4 6',
-    fillColor: '#6e8cae',
-    fillOpacity: 0.06,
-};
-
-const EXCLUDE_DRAFT = {
-    ...DRAFT_STYLE,
-    color: '#b56b6b',
-    fillColor: '#b56b6b',
-};
-
-function dragThresholdMeters(zoom, lat) {
-    const metersPerPixel = 156543.03392 * Math.cos(lat * Math.PI / 180) / (2 ** zoom);
-    return Math.max(MIN_DRAG_M, 8 * metersPerPixel);
-}
-
-function isClick(current, thresholdM) {
+/** Too small to be a shape (a click, or a wobble): nothing is drawn. */
+function tooSmall(current, thresholdM) {
     if (current.kind === 'circle') return current.radiusM < thresholdM;
     if (current.kind === 'box') {
         const box = boxFromCorners(current.a, current.b);
         const height = metersBetween(box.south, box.west, box.north, box.west);
         const width = metersBetween(box.south, box.west, box.south, box.east);
-        return height < thresholdM && width < thresholdM;
+        return height < thresholdM || width < thresholdM;
     }
     if (current.kind === 'freeform') {
         const start = current.points[0];
@@ -73,151 +51,105 @@ function isClick(current, thresholdM) {
             metersBetween(start.lat, start.lng, point.lat, point.lng) < thresholdM
         ));
     }
-    return false;
+    return true;
 }
 
-function clickLatLng(current) {
-    if (current.kind === 'box') return { lat: current.a.lat, lng: current.a.lng };
-    if (current.kind === 'freeform') return { lat: current.points[0].lat, lng: current.points[0].lng };
-    return { lat: current.lat, lng: current.lng };
+/** The shape a finished drag describes (null if it is not one). */
+function shapeOf(current) {
+    if (current.kind === 'circle') {
+        return { shape: 'circle', lat: current.lat, lng: current.lng, radiusM: current.radiusM };
+    }
+    if (current.kind === 'box') return { shape: 'box', ...boxFromCorners(current.a, current.b) };
+    if (current.kind === 'freeform') {
+        const coordinates = thinCoordinates(current.points);
+        return coordinates.length >= 3 ? { shape: 'freeform', coordinates } : null;
+    }
+    return null;
 }
 
 /**
- * Circle, box, and freeform gestures. A click without a drag drops a pin.
- * Graph-creation exclusion reuses the freeform drag and reports raw coordinates.
+ * Circle, box, and freeform areas: drag to draw. An include area stays a
+ * shape (routes must enter it). An excluded area becomes the red roads inside
+ * it, kept with its outline: the map draws the outline, and the Road tool
+ * shows the roads (to turn single ones back on) when the pointer is inside.
  */
 function DrawingHandler({
     activeTool,
     isExcludeMode,
-    exclusionDraw = false,
-    snapPaths = [],
-    onSelection,
-    onDrawingComplete,
-    onSnapMiss,
+    onSelection, // include area: (selection)
+    onExcludeArea, // excluded area: (edges, outline)
+    onSnapMiss, // an excluded area with no road in it
     draftingRef,
-    pinOnClick = false,
+    roadIndex = null,
+    drawStyle = null, // the shape being dragged (default: the through / avoid area colours)
 }) {
     const map = useMap();
     const draftRef = useRef(null);
     const [draft, setDraft] = useState(null);
+    const drawing = activeTool === 'circle' || activeTool === 'box' || activeTool === 'freeform';
 
     const writeDraft = useCallback((next) => {
         draftRef.current = next;
         setDraft(next);
     }, []);
 
+    // Esc cancels a shape being drawn.
     useEffect(() => {
         if (!draftingRef) return undefined;
         draftingRef.current = () => {
             if (!draftRef.current) return false;
-            draftRef.current = null;
-            setDraft(null);
+            writeDraft(null);
             return true;
         };
         return () => {
             draftingRef.current = null;
         };
-    }, [draftingRef]);
+    }, [draftingRef, writeDraft]);
 
     useEffect(() => {
-        const el = map.getContainer();
-        const drawing = activeTool === 'circle' || activeTool === 'box' || activeTool === 'freeform';
-        if (drawing) {
-            el.classList.add('route-tool-active');
-            el.style.cursor = 'crosshair';
-            map.boxZoom.disable();
-            map.dragging.disable();
-        } else {
-            el.classList.remove('route-tool-active');
-            el.style.cursor = '';
-            map.dragging.enable();
-            map.boxZoom.enable();
+        if (!drawing) {
             writeDraft(null);
+            return undefined;
         }
+        const el = map.getContainer();
+        el.classList.add('route-tool-active');
+        map.boxZoom.disable();
+        map.dragging.disable();
         return () => {
             el.classList.remove('route-tool-active');
-            el.style.cursor = '';
             map.dragging.enable();
             map.boxZoom.enable();
         };
-    }, [activeTool, map, writeDraft]);
+    }, [drawing, map, writeDraft]);
 
-    const dropPoint = useCallback((lat, lng, exclude) => {
-        const maxM = snapToleranceMeters(map.getZoom(), lat);
-        const snapped = snapToRoutes(snapPaths, lat, lng, maxM);
-        if (!snapped) {
-            onSnapMiss?.();
-            return;
-        }
-        onSelection?.({
-            id: newId(),
-            type: exclude ? 'exclude' : 'include',
-            shape: 'point',
-            lat: snapped.lat,
-            lng: snapped.lng,
-            radiusM: POINT_RADIUS_M,
-        });
-    }, [map, snapPaths, onSelection, onSnapMiss]);
+    const cb = useRef({});
+    cb.current = { onSelection, onExcludeArea, onSnapMiss, roadIndex };
 
     const commit = useCallback((current) => {
-        if (!current) return;
-        const exclude = current.exclude;
-
-        const point = clickLatLng(current);
-        const threshold = dragThresholdMeters(map.getZoom(), point.lat);
-        if (isClick(current, threshold)) {
-            if (!exclusionDraw) dropPoint(point.lat, point.lng, exclude);
+        const start = current.kind === 'box' ? current.a : current.kind === 'freeform' ? current.points[0] : current;
+        const thresholdM = Math.max(MIN_DRAG_M, 8 * metersPerPixel(map.getZoom(), start.lat));
+        if (tooSmall(current, thresholdM)) return;
+        const shape = shapeOf(current);
+        if (!shape) return;
+        const { onSelection: include, onExcludeArea: exclude, onSnapMiss: miss, roadIndex: index } = cb.current;
+        if (!current.exclude) {
+            include?.({ id: newId(), type: 'include', ...shape });
             return;
         }
-
-        if (current.kind === 'freeform') {
-            const coordinates = thinCoordinates(current.points);
-            if (coordinates.length < 3) return;
-            if (exclusionDraw) {
-                onDrawingComplete?.(coordinates, 'freeform', true);
-                return;
-            }
-            onSelection?.({
-                id: newId(),
-                type: exclude ? 'exclude' : 'include',
-                shape: 'freeform',
-                coordinates,
-            });
+        const edges = index ? edgesInShape(index, shape) : [];
+        if (!edges.length) {
+            miss?.();
             return;
         }
-
-        if (exclusionDraw) return;
-
-        if (current.kind === 'circle') {
-            onSelection?.({
-                id: newId(),
-                type: exclude ? 'exclude' : 'include',
-                shape: 'circle',
-                lat: current.lat,
-                lng: current.lng,
-                radiusM: current.radiusM,
-            });
-            return;
-        }
-
-        if (current.kind === 'box') {
-            const box = boxFromCorners(current.a, current.b);
-            onSelection?.({
-                id: newId(),
-                type: exclude ? 'exclude' : 'include',
-                shape: 'box',
-                ...box,
-            });
-        }
-    }, [map, exclusionDraw, onDrawingComplete, onSelection, dropPoint]);
+        exclude?.(edges, shape);
+    }, [map]);
 
     useEffect(() => {
-        if (!activeTool) return undefined;
+        if (!drawing) return undefined;
 
         const onDown = (e) => {
-            if (activeTool !== 'circle' && activeTool !== 'box' && activeTool !== 'freeform') return;
             if (e.originalEvent && e.originalEvent.button !== 0) return;
-            const exclude = isExcludeMode || e.originalEvent?.shiftKey;
+            const exclude = isExcludeMode || !!e.originalEvent?.shiftKey;
             const latlng = e.latlng;
             if (activeTool === 'circle') {
                 writeDraft({ kind: 'circle', lat: latlng.lat, lng: latlng.lng, radiusM: 0, exclude });
@@ -246,57 +178,22 @@ function DrawingHandler({
         const onUp = () => {
             const current = draftRef.current;
             if (!current) return;
-            draftRef.current = null;
-            setDraft(null);
+            writeDraft(null);
             commit(current);
         };
 
         map.on('mousedown', onDown);
         map.on('mousemove', onMove);
         window.addEventListener('mouseup', onUp);
-
         return () => {
             map.off('mousedown', onDown);
             map.off('mousemove', onMove);
             window.removeEventListener('mouseup', onUp);
         };
-    }, [map, activeTool, isExcludeMode, exclusionDraw, snapPaths, onSelection, onSnapMiss, commit, writeDraft]);
-
-    useEffect(() => {
-        if (!pinOnClick) return undefined;
-        let timer = null;
-
-        const onClick = (e) => {
-            if (e.originalEvent?.detail > 1) {
-                clearTimeout(timer);
-                timer = null;
-                return;
-            }
-            const exclude = isExcludeMode || e.originalEvent?.shiftKey;
-            const { lat, lng } = e.latlng;
-            clearTimeout(timer);
-            timer = setTimeout(() => {
-                timer = null;
-                dropPoint(lat, lng, exclude);
-            }, 220);
-        };
-
-        const onDoubleClick = () => {
-            clearTimeout(timer);
-            timer = null;
-        };
-
-        map.on('click', onClick);
-        map.on('dblclick', onDoubleClick);
-        return () => {
-            clearTimeout(timer);
-            map.off('click', onClick);
-            map.off('dblclick', onDoubleClick);
-        };
-    }, [map, pinOnClick, isExcludeMode, dropPoint]);
+    }, [map, drawing, activeTool, isExcludeMode, commit, writeDraft]);
 
     if (!draft) return null;
-    const style = draft.exclude ? EXCLUDE_DRAFT : DRAFT_STYLE;
+    const style = drawStyle || { ...(draft.exclude ? AREA_STYLE.exclude : AREA_STYLE.include), weight: 2, opacity: 0.95 };
 
     if (draft.kind === 'circle') {
         return (
@@ -309,7 +206,6 @@ function DrawingHandler({
             />
         );
     }
-
     if (draft.kind === 'box') {
         const box = boxFromCorners(draft.a, draft.b);
         return (
@@ -321,11 +217,9 @@ function DrawingHandler({
             />
         );
     }
-
     if (draft.kind === 'freeform' && draft.points.length >= 2) {
         return <Polygon positions={draft.points} pathOptions={style} pane="tools" interactive={false} />;
     }
-
     return null;
 }
 

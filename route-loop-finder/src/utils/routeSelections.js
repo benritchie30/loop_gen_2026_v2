@@ -9,7 +9,6 @@ const M_PER_DEG = 111320;
 
 const sampleCache = new WeakMap();
 const cellCache = new WeakMap();
-const signatureCache = new WeakMap();
 // One grid for every run, so two generations can share a cell id.
 const MATCH_COS = Math.cos((35 * Math.PI) / 180);
 
@@ -52,7 +51,90 @@ function pointInRing(lat, lng, ring) {
     return inside;
 }
 
+// Painted roads: a route sample counts as "on the road" within EDGE_HIT_M of
+// the road's interior. The ends are trimmed by EDGE_TRIM_M so a route that only
+// passes through the road's intersections is not on it (the search forbids or
+// requires riding the edge, not touching its nodes); a short edge keeps its
+// midpoint.
+const EDGE_HIT_M = 25;
+const EDGE_TRIM_M = 30;
+const EDGE_CELL_M = 50;
+const edgeGridCache = new WeakMap();
+
+/** Grid of points every ~15 m along the interior of a painted selection's roads, built once. */
+function edgeGrid(selection) {
+    const cached = edgeGridCache.get(selection);
+    if (cached) return cached;
+    const lines = selection.lines || [];
+    const cos = lines.length && lines[0].length
+        ? Math.cos((lines[0][0][0] * Math.PI) / 180)
+        : 1;
+    const cells = new Map();
+    const put = (lat, lng) => {
+        const key = `${Math.floor((lng * M_PER_DEG * cos) / EDGE_CELL_M)},${Math.floor((lat * M_PER_DEG) / EDGE_CELL_M)}`;
+        const list = cells.get(key);
+        if (list) list.push(lat, lng);
+        else cells.set(key, [lat, lng]);
+    };
+    lines.forEach((pts) => {
+        if (pts.length < 2) return;
+        const segs = [];
+        let total = 0;
+        for (let i = 1; i < pts.length; i++) {
+            const seg = Math.hypot((pts[i][0] - pts[i - 1][0]) * M_PER_DEG, (pts[i][1] - pts[i - 1][1]) * M_PER_DEG * cos);
+            segs.push(seg);
+            total += seg;
+        }
+        const at = (d) => {
+            // Point d metres along the polyline.
+            let acc = 0;
+            for (let i = 0; i < segs.length; i++) {
+                if (acc + segs[i] >= d || i === segs.length - 1) {
+                    const f = segs[i] > 0 ? Math.min(1, Math.max(0, (d - acc) / segs[i])) : 0;
+                    return [pts[i][0] + (pts[i + 1][0] - pts[i][0]) * f, pts[i][1] + (pts[i + 1][1] - pts[i][1]) * f];
+                }
+                acc += segs[i];
+            }
+            return pts[pts.length - 1];
+        };
+        let from = EDGE_TRIM_M;
+        let to = total - EDGE_TRIM_M;
+        if (to <= from) {
+            from = total / 2;
+            to = total / 2;
+        }
+        for (let d = from; d <= to + 1e-6; d += 15) {
+            const p = at(Math.min(d, to));
+            put(p[0], p[1]);
+        }
+        const end = at(to);
+        put(end[0], end[1]);
+    });
+    const grid = { cells, cos };
+    edgeGridCache.set(selection, grid);
+    return grid;
+}
+
+function edgesContain(selection, lat, lng) {
+    const { cells, cos } = edgeGrid(selection);
+    const cx = Math.floor((lng * M_PER_DEG * cos) / EDGE_CELL_M);
+    const cy = Math.floor((lat * M_PER_DEG) / EDGE_CELL_M);
+    for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+            const list = cells.get(`${cx + dx},${cy + dy}`);
+            if (!list) continue;
+            for (let i = 0; i < list.length; i += 2) {
+                if (metersBetween(lat, lng, list[i], list[i + 1]) <= EDGE_HIT_M) return true;
+            }
+        }
+    }
+    return false;
+}
+
 export function selectionContains(selection, lat, lng) {
+    if (selection.shape === 'edges') {
+        return edgesContain(selection, lat, lng);
+    }
     if (selection.shape === 'point' || selection.shape === 'circle') {
         return metersBetween(lat, lng, selection.lat, selection.lng) <= selection.radiusM;
     }
@@ -127,44 +209,6 @@ function cellsFor(path) {
     return cells;
 }
 
-/** Roads shared by a route, as sorted 80 m cells. Empty when the route has no samples. */
-export function routeSignature(path) {
-    const cached = signatureCache.get(path);
-    if (cached !== undefined) return cached;
-
-    const samples = pathSamples(path);
-    const cells = new Set();
-    for (let i = 0; i < samples.length; i += 2) {
-        const x = Math.round((samples[i + 1] * M_PER_DEG * MATCH_COS) / CELL_M);
-        const y = Math.round((samples[i] * M_PER_DEG) / CELL_M);
-        cells.add(`${x},${y}`);
-    }
-    const signature = cells.size ? Array.from(cells).sort().join('|') : '';
-    signatureCache.set(path, signature);
-    return signature;
-}
-
-/**
- * Split source routes into those that cover the same roads as some other route,
- * and those that do not. Matching is the 80 m cell set, so direction does not matter.
- */
-export function routesSharingGround(sourcePaths, otherPaths) {
-    const other = new Set();
-    for (let i = 0; i < otherPaths.length; i++) {
-        const signature = routeSignature(otherPaths[i]);
-        if (signature) other.add(signature);
-    }
-    const shared = [];
-    const only = [];
-    for (let i = 0; i < sourcePaths.length; i++) {
-        const path = sourcePaths[i];
-        const signature = routeSignature(path);
-        if (signature && other.has(signature)) shared.push(path);
-        else only.push(path);
-    }
-    return { shared, only };
-}
-
 function jaccard(a, b) {
     if (a.size === 0 && b.size === 0) return 0;
     let inter = 0;
@@ -223,4 +267,20 @@ export function sortBySimilarity(paths, ascending = true) {
     }
 
     return ordered;
+}
+
+/** One line describing the painted roads and areas (and old pins). */
+export function describeSelections(selections) {
+    const parts = [];
+    const count = (label, n) => { if (n) parts.push(`${n} ${label}${n === 1 ? '' : 's'}`); };
+    const edges = selections.filter((s) => s.shape === 'edges');
+    const isArea = (s) => s.kind === 'area';
+    count('required road', edges.filter((s) => s.type === 'include' && s.kind === 'road').length);
+    count('required edge', edges.filter((s) => s.type === 'include' && s.kind !== 'road').length);
+    count('avoided road', edges.filter((s) => s.type === 'exclude' && !isArea(s)).length);
+    count('through area', selections.filter((s) => s.type === 'include' && ['circle', 'box', 'freeform'].includes(s.shape)).length);
+    count('avoided area', edges.filter((s) => s.type === 'exclude' && isArea(s)).length
+        + selections.filter((s) => s.type === 'exclude' && ['circle', 'box', 'freeform'].includes(s.shape)).length);
+    count('pin', selections.filter((s) => s.shape === 'point').length);
+    return parts.join(' · ');
 }

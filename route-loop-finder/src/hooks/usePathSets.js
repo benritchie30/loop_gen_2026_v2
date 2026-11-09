@@ -1,8 +1,33 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { FILTER_METRICS, OPEN_RANGE, filterByMetrics, metricBounds, sanitizeRouteFilters, sortPaths } from '../utils/pathFiltering';
-import { filterByRouteSelections, routesSharingGround } from '../utils/routeSelections';
+import { filterByRouteSelections } from '../utils/routeSelections';
+import { applyPaint } from '../utils/paintRoads';
+import { deleteGeneration, loadGenerations, saveGeneration } from '../utils/generationsDb';
+import { lengthRange } from '../utils/pathSetGroups';
+import { routeKey } from '../utils/routeIdentity';
 
-/** Next unused label, so a blank name still tells two runs of the same algorithm apart. */
+function newRouteId(pathSetId) {
+    return typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `${pathSetId}-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+}
+
+/** Filters shown on every generation (others are added with "+ Filter"). */
+export const PINNED_FILTERS = ['total_miles'];
+/**
+ * Sort choices: Best (the order the search found them), every route metric,
+ * and Similar (routes that share ground next to each other).
+ */
+const SORT_METRIC_ORDER = ['total_miles', 'climb_rate', 'total_climb_ft', 'difficulty', 'loop_ratio', 'turns', 'discomfort'];
+export const SORT_OPTIONS = [
+    { id: 'found', label: 'Best' },
+    ...SORT_METRIC_ORDER.map((key) => ({ id: key, label: FILTER_METRICS.find((m) => m.key === key).label })),
+    { id: 'similar', label: 'Similar' },
+];
+const FILTERS_VERSION = '2'; // 2: Climb is no longer a default filter
+const SAVE_DELAY_MS = 1200;
+
+/** Next unused name, so two searches from the same place stay apart. */
 export function suggestGenerationName(base, pathSets) {
     const used = new Set();
     Object.values(pathSets || {}).forEach((set) => {
@@ -15,46 +40,144 @@ export function suggestGenerationName(base, pathSets) {
     return `${label} ${n}`;
 }
 
-/**
- * Manages all path set state - the core data store for the application.
- * A PathSet represents a starting point and all generated routes from it.
- */
-export function usePathSets() {
-    // Map of pathSetId -> { markerPosition, paths: [] }
-    const [pathSets, setPathSets] = useState({});
-    // A and B are generation ids. mode is how two selected runs combine.
-    const [compare, setCompare] = useState({ a: null, b: null, mode: 'intersection' });
-    const [selectedPathId, setSelectedPathId] = useState(null);
-    const [routeFilters, setRouteFilters] = useState(() => {
-        try {
-            const saved = localStorage.getItem('routeFilterLimits');
-            if (saved) {
-                const parsed = sanitizeRouteFilters(JSON.parse(saved));
-                if (parsed.length > 0) return parsed;
-            }
-            // Older saves used fixed slider ends, so keep only which filters were open.
-            const legacy = sanitizeRouteFilters(JSON.parse(localStorage.getItem('routeFilters') || '[]'));
-            if (legacy.length > 0) {
-                return legacy.map((filter) => ({ key: filter.key, range: OPEN_RANGE }));
-            }
-        } catch {
-            // Fall through to the distance default.
+/** What is kept in the browser for a generation. */
+function toRecord(id, set) {
+    return {
+        id,
+        name: set.name,
+        createdAt: set.createdAt,
+        markerPosition: set.markerPosition,
+        settings: set.settings,
+        selections: set.selections || [],
+        paths: set.paths,
+        batches: set.batches || 0,
+        lastNote: set.lastNote || null,
+    };
+}
+
+function fromRecord(record) {
+    return {
+        markerPosition: record.markerPosition,
+        paths: Array.isArray(record.paths) ? record.paths : [],
+        isComplete: true,
+        resumable: true, // the server can always rebuild it from this copy
+        name: record.name || 'Generation',
+        settings: record.settings || {},
+        selections: record.selections || [],
+        createdAt: record.createdAt || 0,
+        batches: record.batches || 0,
+        lastNote: record.lastNote || null,
+    };
+}
+
+function readRouteFilters() {
+    let saved = [];
+    try {
+        saved = sanitizeRouteFilters(JSON.parse(localStorage.getItem('routeFilterLimits') || '[]'));
+        // Climb used to be shown on every generation (and so was always saved): start without it once.
+        if (localStorage.getItem('routeFiltersVersion') !== FILTERS_VERSION) {
+            saved = saved.filter((f) => f.key !== 'total_climb_ft');
+            localStorage.setItem('routeFiltersVersion', FILTERS_VERSION);
         }
-        return [{ key: 'total_miles', range: OPEN_RANGE }];
-    });
+    } catch {
+        saved = [];
+    }
+    // Pinned filters first and always present; limits start open for a new generation.
+    const pinned = PINNED_FILTERS.map((key) => ({ key, range: OPEN_RANGE }));
+    const extra = saved.filter((f) => !PINNED_FILTERS.includes(f.key)).map((f) => ({ key: f.key, range: OPEN_RANGE }));
+    return [...pinned, ...extra];
+}
+
+/**
+ * Generations (path sets) and the routes of the open one.
+ * A generation: { markerPosition, paths, isComplete, resumable, name,
+ * settings, selections, createdAt, batches, lastNote }. Generations are
+ * saved in the browser (IndexedDB) as they change and loaded at start.
+ * `favorites` (hooks/useFavorites: key -> record) drives "favorites only",
+ * which lists the open generation's favorite routes; one unfavorited there
+ * stays listed until another route is selected.
+ */
+export function usePathSets({ favorites = null } = {}) {
+    const [pathSets, setPathSets] = useState({});
+    const [hydrated, setHydrated] = useState(false);
+    const [activeId, setActiveId] = useState(null);
+    const [selectedPathId, setSelectedPathId] = useState(null);
+    const [hoveredPathId, setHoveredPathId] = useState(null);
+    const [favoritesOnly, setFavoritesOnly] = useState(false);
+    const [keptIds, setKeptIds] = useState(() => new Set()); // unfavorited in favorites only, still listed
+    const [routeFilters, setRouteFilters] = useState(readRouteFilters);
     const [sortBy, setSortBy] = useState(() => {
         const saved = localStorage.getItem('sortBy');
-        if (!saved || saved === 'poi') return 'total_miles';
-        if (saved === 'spatial') return 'similar';
-        return saved;
+        return SORT_OPTIONS.some((o) => o.id === saved) ? saved : 'found';
     });
     const [sortAscending, setSortAscending] = useState(true);
     const sortByRef = useRef(sortBy);
     sortByRef.current = sortBy;
 
+    // ---- saved generations ----
+
+    // id -> the generation object last written to storage. A generation is
+    // saved whenever its object changes (immutable updates), so loaded ones
+    // are recorded as saved as they are loaded.
+    const savedRef = useRef(new Map());
+    const saveTimer = useRef(null);
+
     useEffect(() => {
-        localStorage.setItem('routeFilterLimits', JSON.stringify(routeFilters));
+        let cancelled = false;
+        loadGenerations().then((records) => {
+            if (cancelled) return;
+            const loaded = {};
+            records.forEach((r) => {
+                if (r?.id) {
+                    loaded[r.id] = fromRecord(r);
+                    savedRef.current.set(r.id, loaded[r.id]);
+                }
+            });
+            setPathSets((prev) => ({ ...loaded, ...prev }));
+            setHydrated(true);
+        });
+        return () => { cancelled = true; };
+    }, []);
+
+    // Save changed generations a moment after the last change (routes stream
+    // in one by one), and at once when the page is hidden or closed.
+    const pathSetsRef = useRef(pathSets);
+    pathSetsRef.current = pathSets;
+    const flushSaves = useCallback(() => {
+        clearTimeout(saveTimer.current);
+        Object.entries(pathSetsRef.current).forEach(([id, set]) => {
+            if (savedRef.current.get(id) === set) return;
+            savedRef.current.set(id, set);
+            saveGeneration(toRecord(id, set));
+        });
+    }, []);
+    useEffect(() => {
+        if (!hydrated) return undefined;
+        clearTimeout(saveTimer.current);
+        saveTimer.current = setTimeout(flushSaves, SAVE_DELAY_MS);
+        return () => clearTimeout(saveTimer.current);
+    }, [pathSets, hydrated, flushSaves]);
+    useEffect(() => {
+        const onHide = () => {
+            if (document.visibilityState === 'hidden') flushSaves();
+        };
+        document.addEventListener('visibilitychange', onHide);
+        window.addEventListener('pagehide', flushSaves);
+        return () => {
+            document.removeEventListener('visibilitychange', onHide);
+            window.removeEventListener('pagehide', flushSaves);
+        };
+    }, [flushSaves]);
+
+    useEffect(() => {
+        localStorage.setItem('routeFilterLimits', JSON.stringify(routeFilters.map((f) => ({ key: f.key, range: OPEN_RANGE }))));
     }, [routeFilters]);
+
+    useEffect(() => {
+        if (sortBy) localStorage.setItem('sortBy', sortBy);
+    }, [sortBy]);
+
+    // ---- filters ----
 
     const setFilterRange = useCallback((key, range) => {
         setRouteFilters((prev) => prev.map((filter) => (
@@ -71,417 +194,379 @@ export function usePathSets() {
     }, []);
 
     const removeRouteFilter = useCallback((key) => {
-        setRouteFilters((prev) => {
-            const next = prev.filter((filter) => filter.key !== key);
-            if (next.length > 0) return next;
-            return [{ key: 'total_miles', range: OPEN_RANGE }];
-        });
+        if (PINNED_FILTERS.includes(key)) return;
+        setRouteFilters((prev) => prev.filter((filter) => filter.key !== key));
     }, []);
 
-    // Save sortBy to localStorage
-    useEffect(() => {
-        if (sortBy) {
-            localStorage.setItem('sortBy', sortBy);
-        }
-    }, [sortBy]);
+    const resetFilterRanges = useCallback(() => {
+        setRouteFilters((prev) => prev.map((f) => ({ ...f, range: OPEN_RANGE })));
+    }, []);
 
+    // ---- pins, areas, painted roads ----
 
-    // drawnSelections: { id, type: 'include'|'exclude', shape, geometry }
+    // drawnSelections: { id, type: 'include'|'exclude', shape, ... }
     const [drawnSelections, setDrawnSelections] = useState([]);
 
-    // Create a new path set when generation starts. meta is the name and settings snapshot.
+    // Selections belong to the open generation (saved with it and shown when it
+    // is opened again). In input mode they are the plan's, for the first search.
+    const selectionsRef = useRef(drawnSelections);
+    selectionsRef.current = drawnSelections;
+    const activeIdRef = useRef(activeId);
+    activeIdRef.current = activeId;
+    useEffect(() => {
+        const id = activeIdRef.current;
+        if (!id) return;
+        setPathSets((prev) => {
+            const pathSet = prev[id];
+            if (!pathSet || pathSet.selections === drawnSelections) return prev;
+            return { ...prev, [id]: { ...pathSet, selections: drawnSelections } };
+        });
+    }, [drawnSelections]);
+
+    const addDrawnSelection = useCallback((selectionData) => {
+        setDrawnSelections((prev) => [...prev, selectionData]);
+        setSelectedPathId(null);
+    }, []);
+
+    const toggleEdges = useCallback((edgeList, options) => {
+        setDrawnSelections((prev) => applyPaint(prev, edgeList, options));
+        setSelectedPathId(null);
+    }, []);
+
+    const clearDrawnSelections = useCallback(() => setDrawnSelections([]), []);
+    // Another list of painted roads and areas (the plan's tabs keep one each).
+    const replaceSelections = useCallback((list) => setDrawnSelections(list || []), []);
+
+    const undoLastSelection = useCallback(() => {
+        setDrawnSelections((prev) => (prev.length === 0 ? prev : prev.slice(0, -1)));
+        setSelectedPathId(null);
+    }, []);
+
+    const removeSelection = useCallback((id) => {
+        setDrawnSelections((prev) => prev.filter((selection) => selection.id !== id));
+        setSelectedPathId(null);
+    }, []);
+
+    // Move a pin onto the road the server snapped it to, or clear its pending flag.
+    const updateSelection = useCallback((id, patch) => {
+        setDrawnSelections((prev) => prev.map((selection) => (
+            selection.id === id ? { ...selection, ...patch } : selection
+        )));
+    }, []);
+
+    // ---- generations ----
+
+    // A generation starts: meta is its name, settings and selections (else
+    // the ones painted now go with it). It becomes the open one.
     const createPathSet = useCallback((pathSetId, markerPosition, meta) => {
         const info = meta || {};
-        const settings = info.settings || {};
-        setPathSets(prev => ({
+        setPathSets((prev) => ({
             ...prev,
             [pathSetId]: {
                 markerPosition,
                 paths: [],
                 isComplete: false,
+                resumable: true,
                 name: info.name || 'Generation',
-                graph: info.graph || '',
-                algorithmLabel: info.algorithmLabel || settings.algorithm || 'Generation',
-                settings,
-                createdAt: Date.now()
-            }
+                settings: info.settings || {},
+                selections: info.selections || selectionsRef.current,
+                createdAt: Date.now(),
+                batches: 0,
+            },
         }));
-        setCompare(prev => ({
-            ...prev,
-            a: pathSetId,
-            b: prev.b === pathSetId ? null : prev.b
-        }));
+        setActiveId(pathSetId);
         setSelectedPathId(null);
-        setDrawnSelections([]);
-    }, []);
+        resetFilterRanges();
+    }, [resetFilterRanges]);
 
-    // Add a path to an existing path set
     const addPathToSet = useCallback((pathSetId, pathData) => {
-        setPathSets(prev => {
+        setPathSets((prev) => {
             const pathSet = prev[pathSetId];
             if (!pathSet) return prev;
-
-            // Generate a unique ID for the path if it doesn't have one
-            // Use crypto.randomUUID where available, or fallback to timestamp+random
-            const uniqueId = typeof crypto !== 'undefined' && crypto.randomUUID
-                ? crypto.randomUUID()
-                : `${pathSetId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
-            const pathWithId = {
-                ...pathData,
-                id: uniqueId
-            };
-
-            return {
-                ...prev,
-                [pathSetId]: {
-                    ...pathSet,
-                    paths: [...pathSet.paths, pathWithId]
-                }
-            };
+            const pathWithId = { ...pathData, id: newRouteId(pathSetId) };
+            return { ...prev, [pathSetId]: { ...pathSet, paths: [...pathSet.paths, pathWithId] } };
         });
     }, []);
 
-    // Mark a path set as complete
-    const completePathSet = useCallback((pathSetId) => {
-        setPathSets(prev => {
+    // A batch ended. `info.note` explains a thin batch.
+    const completePathSet = useCallback((pathSetId, info = {}) => {
+        setPathSets((prev) => {
             const pathSet = prev[pathSetId];
             if (!pathSet) return prev;
+            const next = { ...pathSet, isComplete: true };
+            if (typeof info.resumable === 'boolean') next.resumable = info.resumable;
+            if (info.note !== undefined) next.lastNote = info.note;
+            return { ...prev, [pathSetId]: next };
+        });
+    }, []);
 
+    // More routes started for a generation.
+    const resumePathSet = useCallback((pathSetId) => {
+        setPathSets((prev) => {
+            const pathSet = prev[pathSetId];
+            if (!pathSet) return prev;
             return {
                 ...prev,
-                [pathSetId]: { ...pathSet, isComplete: true }
+                [pathSetId]: { ...pathSet, isComplete: false, lastNote: null, batches: (pathSet.batches || 0) + 1 },
             };
         });
     }, []);
 
-    // Open a generation as set A. Clicking the generation already in B swaps them.
-    const selectPathSet = useCallback((pathSetId) => {
-        setDrawnSelections([]);
-        setSelectedPathId(null);
-        if (!pathSetId) {
-            setCompare(prev => ({ ...prev, a: null }));
-            return;
-        }
-        setCompare(prev => {
-            if (!pathSets[pathSetId]) return prev;
-            if (prev.b === pathSetId) {
-                return { ...prev, a: pathSetId, b: prev.a === pathSetId ? null : prev.a };
-            }
-            return { ...prev, a: pathSetId };
+    // The server cannot continue it (and had nothing to rebuild from).
+    const expirePathSetSession = useCallback((pathSetId) => {
+        setPathSets((prev) => {
+            const pathSet = prev[pathSetId];
+            if (!pathSet) return prev;
+            return { ...prev, [pathSetId]: { ...pathSet, isComplete: true, resumable: false } };
         });
+    }, []);
+
+    /**
+     * Open a generation (null closes it); its painted roads and areas come
+     * back. `addSelections` (the plan's, when adding to it) join them.
+     */
+    const selectPathSet = useCallback((pathSetId, addSelections = null) => {
+        setActiveId(pathSetId || null);
+        let selections = pathSetId ? (pathSets[pathSetId]?.selections || []) : [];
+        if (pathSetId && addSelections?.length) {
+            const have = new Set(selections.map((sel) => sel.id));
+            selections = [...selections, ...addSelections.filter((sel) => !have.has(sel.id))];
+        }
+        setDrawnSelections(selections);
+        setSelectedPathId(null);
+        setHoveredPathId(null);
+        setFavoritesOnly(false);
+        setKeptIds(new Set());
+        if (pathSetId) resetFilterRanges();
+    }, [pathSets, resetFilterRanges]);
+
+    const renamePathSet = useCallback((pathSetId, name) => {
+        const clean = (name || '').trim();
+        if (!clean) return;
+        setPathSets((prev) => (prev[pathSetId]
+            ? { ...prev, [pathSetId]: { ...prev[pathSetId], name: clean } }
+            : prev));
+    }, []);
+
+    /** Settings used for the generation's later batches (length, roads). */
+    const updatePathSetSettings = useCallback((pathSetId, patch) => {
+        setPathSets((prev) => (prev[pathSetId]
+            ? { ...prev, [pathSetId]: { ...prev[pathSetId], settings: { ...prev[pathSetId].settings, ...patch } } }
+            : prev));
+    }, []);
+
+    /** Delete a generation; returns it so it can be restored (undo). */
+    const deletePathSet = useCallback((pathSetId) => {
+        const removed = pathSets[pathSetId];
+        if (!removed) return null;
+        setPathSets((prev) => {
+            const next = { ...prev };
+            delete next[pathSetId];
+            return next;
+        });
+        savedRef.current.delete(pathSetId);
+        deleteGeneration(pathSetId);
+        if (activeIdRef.current === pathSetId) {
+            setActiveId(null);
+            setDrawnSelections([]);
+        }
+        return { id: pathSetId, set: removed };
     }, [pathSets]);
 
-    const setCompareA = useCallback((id) => {
-        const next = id || null;
-        setCompare(prev => ({
-            ...prev,
-            a: next,
-            b: next && next === prev.b ? null : prev.b
-        }));
-        setDrawnSelections([]);
-        setSelectedPathId(null);
+    const restorePathSet = useCallback((removed) => {
+        if (!removed?.id) return;
+        setPathSets((prev) => ({ ...prev, [removed.id]: { ...removed.set, isComplete: true } }));
     }, []);
 
-    const setCompareB = useCallback((id) => {
-        const next = id || null;
-        setCompare(prev => ({
-            ...prev,
-            b: next,
-            a: next && next === prev.a ? null : prev.a
-        }));
-        setDrawnSelections([]);
-        setSelectedPathId(null);
-    }, []);
+    // ---- the open generation's routes ----
 
-    const setCompareMode = useCallback((mode) => {
-        if (mode !== 'intersection' && mode !== 'difference') return;
-        setCompare(prev => (prev.mode === mode ? prev : { ...prev, mode }));
-    }, []);
+    const activeSet = activeId ? pathSets[activeId] || null : null;
+    const allPaths = useMemo(() => activeSet?.paths || [], [activeSet]);
 
-    const swapCompare = useCallback(() => {
-        setCompare(prev => ({ ...prev, a: prev.b, b: prev.a }));
-    }, []);
-
-    // Add a drawn selection for filtering
-    const addDrawnSelection = useCallback((selectionData) => {
-        setDrawnSelections(prev => [...prev, selectionData]);
-        setSelectedPathId(null);
-        const currentSort = sortByRef.current;
-        if (currentSort === 'total_miles' || currentSort === 'spatial' || currentSort === 'poi') {
-            setSortBy('similar');
-            setSortAscending(true);
-        }
-    }, []);
-
-    // Clear drawn selections
-    const clearDrawnSelections = useCallback(() => {
-        setDrawnSelections([]);
-    }, []);
-
-    const undoLastSelection = useCallback(() => {
-        setDrawnSelections(prev => {
-            if (prev.length === 0) return prev;
-            return prev.slice(0, -1);
-        });
-        setSelectedPathId(null);
-    }, []);
-
-    const removeSelection = useCallback((id) => {
-        setDrawnSelections(prev => prev.filter((selection) => selection.id !== id));
-        setSelectedPathId(null);
-    }, []);
-
-    const compareA = compare.a && pathSets[compare.a] ? compare.a : null;
-    const compareB = compare.b && pathSets[compare.b] ? compare.b : null;
-    const compareMode = compare.mode === 'difference' ? 'difference' : 'intersection';
-    // One selected run is shown whole. Two runs combine from A's point of view.
-    const sourceId = compareA && compareB ? compareA : (compareA || compareB);
-
-    const comparedPaths = useMemo(() => {
-        const setA = compareA ? pathSets[compareA] : null;
-        const setB = compareB ? pathSets[compareB] : null;
-        if (setA && setB) {
-            const { shared, only } = routesSharingGround(setA.paths, setB.paths);
-            return compareMode === 'difference' ? only : shared;
-        }
-        if (setA) return setA.paths;
-        if (setB) return setB.paths;
-        return [];
-    }, [pathSets, compareA, compareB, compareMode]);
-
-    const generations = useMemo(() => {
-        return Object.entries(pathSets)
-            .map(([id, set]) => ({
-                id,
-                name: set.name || 'Generation',
-                algorithmLabel: set.algorithmLabel || '',
-                graph: set.graph || '',
-                settings: set.settings || {},
-                markerPosition: set.markerPosition,
-                pathCount: set.paths.length,
-                isComplete: !!set.isComplete,
-                createdAt: set.createdAt || 0
-            }))
-            .sort((a, b) => a.createdAt - b.createdAt || a.name.localeCompare(b.name));
-    }, [pathSets]);
-
-    // Get the active path set
-    const activePathSet = sourceId ? pathSets[sourceId] : null;
+    const generations = useMemo(() => Object.entries(pathSets)
+        .map(([id, set]) => ({
+            id,
+            name: set.name || 'Generation',
+            settings: set.settings || {},
+            markerPosition: set.markerPosition,
+            pathCount: set.paths.length,
+            lengthRange: lengthRange(set.paths),
+            isComplete: !!set.isComplete,
+            resumable: !!set.resumable,
+            lastNote: set.lastNote || null,
+            selections: set.selections || [],
+            createdAt: set.createdAt || 0,
+            batches: set.batches || 0,
+        }))
+        .sort((a, b) => b.createdAt - a.createdAt), [pathSets]);
 
     const filterBounds = useMemo(() => {
         const bounds = {};
         FILTER_METRICS.forEach((metric) => {
-            bounds[metric.key] = metricBounds(comparedPaths, metric);
+            bounds[metric.key] = metricBounds(allPaths, metric);
         });
         return bounds;
-    }, [comparedPaths]);
+    }, [allPaths]);
 
-    // Get filtered paths based on distance, drawn selections, and dropped pins
     const filteredPaths = useMemo(() => {
-        if (!comparedPaths.length) return [];
-
-        let paths = comparedPaths;
-        paths = filterByMetrics(paths, routeFilters);
+        if (!allPaths.length) return [];
+        let paths = filterByMetrics(allPaths, routeFilters);
         paths = filterByRouteSelections(paths, drawnSelections);
+        if (favoritesOnly) {
+            paths = paths.filter((p) => keptIds.has(p.id) || (favorites && favorites.has(routeKey(p))));
+        }
         return sortPaths(paths, sortBy, sortAscending);
-    }, [comparedPaths, routeFilters, drawnSelections, sortBy, sortAscending]);
+    }, [allPaths, routeFilters, drawnSelections, favoritesOnly, favorites, keptIds, sortBy, sortAscending]);
 
-
-
-    // Get the currently displayed path based on ID
     const currentPath = useMemo(() => {
         if (!selectedPathId) return filteredPaths[0] || null;
-        return filteredPaths.find(p => p.id === selectedPathId) || filteredPaths[0] || null;
+        return filteredPaths.find((p) => p.id === selectedPathId) || filteredPaths[0] || null;
     }, [filteredPaths, selectedPathId]);
 
-    // Derive the index for display components
-    const currentPathIndex = useMemo(() => {
-        if (!currentPath) return 0;
-        return filteredPaths.indexOf(currentPath);
-    }, [filteredPaths, currentPath]);
+    const currentPathIndex = useMemo(
+        () => (currentPath ? filteredPaths.indexOf(currentPath) : 0),
+        [filteredPaths, currentPath],
+    );
 
-    // Ensure selectedPathId is valid when filteredPaths changes
+    // Keep the selection on a route that is still listed.
     useEffect(() => {
-        if (filteredPaths.length > 0) {
-            // If we have a selected path, check if it's still in the list
-            if (selectedPathId) {
-                const stillExists = filteredPaths.some(p => p.id === selectedPathId);
-                if (!stillExists) {
-                    // It's gone, default to the first one
-                    setSelectedPathId(filteredPaths[0].id);
-                }
-            } else {
-                // No selection, select the first one
-                setSelectedPathId(filteredPaths[0].id);
-            }
-        } else {
-            setSelectedPathId(null);
-        }
-    }, [filteredPaths, selectedPathId]);
-
-    // Wrappers for sort setters to capture current path - NO LONGER NEEDED with ID-based selection!
-    // The ID based selection automatically preserves the selection because the ID doesn't change on sort.
-    const handleSetSortBy = useCallback((newSortBy) => {
-        setSortBy(newSortBy);
-    }, []);
-
-    const handleSetSortAscending = useCallback((newAsc) => {
-        setSortAscending(newAsc);
-        setSelectedPathId(null); // Reset selection to default to the first one in the new order
-    }, []);
-
-    // Navigation helpers
-    const nextPath = useCallback(() => {
-        const currentIndex = filteredPaths.findIndex(p => p.id === currentPath?.id);
-        if (currentIndex < filteredPaths.length - 1) {
-            setSelectedPathId(filteredPaths[currentIndex + 1].id);
-        }
-    }, [filteredPaths, currentPath]);
-
-    const prevPath = useCallback(() => {
-        const currentIndex = filteredPaths.findIndex(p => p.id === currentPath?.id);
-        if (currentIndex > 0) {
-            setSelectedPathId(filteredPaths[currentIndex - 1].id);
-        }
-    }, [filteredPaths, currentPath]);
-
-    const jumpPath = useCallback((delta) => {
-        const currentIndex = filteredPaths.findIndex(p => p.id === currentPath?.id);
-        if (currentIndex === -1 && filteredPaths.length > 0) {
-            setSelectedPathId(filteredPaths[0].id);
+        if (filteredPaths.length === 0) {
+            if (selectedPathId) setSelectedPathId(null);
             return;
         }
-
-        const newIndex = Math.min(Math.max(currentIndex + delta, 0), filteredPaths.length - 1);
-        if (newIndex !== currentIndex) {
-            setSelectedPathId(filteredPaths[newIndex].id);
-        }
-    }, [filteredPaths, currentPath]);
-
-    const goToFirst = useCallback(() => {
-        if (filteredPaths.length > 0) {
+        if (!selectedPathId || !filteredPaths.some((p) => p.id === selectedPathId)) {
             setSelectedPathId(filteredPaths[0].id);
         }
-    }, [filteredPaths]);
+    }, [filteredPaths, selectedPathId]);
 
-    const goToLast = useCallback(() => {
-        if (filteredPaths.length > 0) {
-            setSelectedPathId(filteredPaths[filteredPaths.length - 1].id);
-        }
-    }, [filteredPaths]);
+    // Favorites only: a route unfavorited there stays until another is selected.
+    const keepListed = useCallback((pathId) => {
+        setKeptIds((prev) => (prev.has(pathId) ? prev : new Set(prev).add(pathId)));
+    }, []);
+    const currentId = currentPath?.id ?? null;
+    const keptFor = useRef(currentId);
+    useEffect(() => {
+        if (keptFor.current === currentId) return;
+        keptFor.current = currentId;
+        setKeptIds((prev) => (prev.size ? new Set() : prev));
+    }, [currentId]);
+    // The shown route stays if it is listed (a favorite); else the first one is shown.
+    const showFavoritesOnly = useCallback((on) => {
+        setFavoritesOnly(!!on);
+        setKeptIds(new Set());
+    }, []);
 
-    const goToPath = useCallback((index) => {
-        if (index >= 0 && index < filteredPaths.length) {
-            setSelectedPathId(filteredPaths[index].id);
-        }
-    }, [filteredPaths]);
+    // A new sort keeps the shown route (the list scrolls to it).
+    const chooseSort = useCallback((id) => {
+        if (!SORT_OPTIONS.some((o) => o.id === id) || id === sortByRef.current) return;
+        setSortBy(id);
+        setSortAscending(true);
+    }, []);
 
-    // Get all path set markers for display
-    const pathSetMarkers = useMemo(() => {
-        return Object.entries(pathSets).map(([id, pathSet]) => ({
+    // Flipping the order jumps to the first route of the new order.
+    const flipSort = useCallback(() => {
+        setSortAscending((asc) => !asc);
+        setSelectedPathId(null);
+    }, []);
+
+    const selectPath = useCallback((pathId) => setSelectedPathId(pathId), []);
+
+    const step = useCallback((delta) => {
+        if (!filteredPaths.length) return;
+        const i = filteredPaths.findIndex((p) => p.id === currentPath?.id);
+        const next = Math.min(Math.max((i < 0 ? 0 : i) + delta, 0), filteredPaths.length - 1);
+        setSelectedPathId(filteredPaths[next].id);
+    }, [filteredPaths, currentPath]);
+    const nextPath = useCallback(() => step(1), [step]);
+    const prevPath = useCallback(() => step(-1), [step]);
+
+    // Oldest first: a pin shared by several generations sits at the first one's start.
+    const pathSetMarkers = useMemo(() => Object.entries(pathSets)
+        .map(([id, set]) => ({
             id,
-            name: pathSet.name || 'Generation',
-            position: pathSet.markerPosition,
-            isActive: id === sourceId,
-            pathCount: pathSet.paths.length
-        }));
-    }, [pathSets, sourceId]);
+            name: set.name || 'Generation',
+            position: set.markerPosition,
+            isActive: id === activeId,
+            pathCount: set.paths.length,
+            lengthRange: lengthRange(set.paths),
+            createdAt: set.createdAt || 0,
+        }))
+        .sort((a, b) => a.createdAt - b.createdAt), [pathSets, activeId]);
 
+    // Flip the elevation profile of the shown route (ride it the other way).
     const reverseCurrentPathProfile = useCallback(() => {
-        if (!sourceId || !currentPath) return;
-
-        setPathSets(prev => {
-            const pathSet = prev[sourceId];
+        if (!activeId || !currentPath) return;
+        setPathSets((prev) => {
+            const pathSet = prev[activeId];
             if (!pathSet) return prev;
-
             const paths = [...pathSet.paths];
-            // Find the index of the path in the source array
-            // Note: currentPath is from filteredPaths, so we need to find it in the main list
-            // However, paths objects are references, so we can find index by reference
             const pathIndex = paths.findIndex((p) => p.id === currentPath.id);
-
             if (pathIndex === -1) return prev;
-
-            const originalProfile = currentPath.properties.elevation_profile;
-            if (!originalProfile || originalProfile.length < 2) return prev;
-
-            const totalDist = originalProfile[originalProfile.length - 1][0];
-
-            // Create new reversed profile
+            const profile = currentPath.properties.elevation_profile;
+            if (!profile || profile.length < 2) return prev;
+            const totalDist = profile[profile.length - 1][0];
             // Profile item: [dist_mi, elev_ft, lat, lng, bearing]
-            const reversedProfile = originalProfile.map(p => [
-                Number((totalDist - p[0]).toFixed(3)), // New distance
-                p[1],                                  // Elevation
-                p[2],                                  // Lat
-                p[3],                                  // Lng
-                (p[4] + 180) % 360                     // New Bearing
+            const reversed = profile.map((p) => [
+                Number((totalDist - p[0]).toFixed(3)), p[1], p[2], p[3], (p[4] + 180) % 360,
             ]).reverse();
-
-            const newPath = {
+            paths[pathIndex] = {
                 ...currentPath,
-                properties: {
-                    ...currentPath.properties,
-                    elevation_profile: reversedProfile
-                }
+                properties: { ...currentPath.properties, elevation_profile: reversed },
             };
-
-            paths[pathIndex] = newPath;
-
-            return {
-                ...prev,
-                [sourceId]: {
-                    ...pathSet,
-                    paths: paths
-                }
-            };
+            return { ...prev, [activeId]: { ...pathSet, paths } };
         });
-    }, [sourceId, currentPath]);
+    }, [activeId, currentPath]);
 
     return {
         // State
         pathSets,
-        activePathSetId: sourceId,
-        activePathSet,
+        hydrated,
+        activePathSetId: activeId,
+        activePathSet: activeSet,
         currentPathIndex,
         currentPath,
         filteredPaths,
-        comparedCount: comparedPaths.length,
+        totalPathsCount: allPaths.length,
         generations,
-        compareA,
-        compareB,
-        compareMode,
         routeFilters,
         filterBounds,
         sortBy,
         sortAscending,
         drawnSelections,
         pathSetMarkers,
+        hoveredPathId,
+        favoritesOnly,
 
         // Actions
         createPathSet,
         addPathToSet,
         completePathSet,
+        resumePathSet,
+        expirePathSetSession,
         selectPathSet,
-        setCompareA,
-        setCompareB,
-        setCompareMode,
-        swapCompare,
+        renamePathSet,
+        updatePathSetSettings,
+        deletePathSet,
+        restorePathSet,
         addDrawnSelection,
+        toggleEdges,
         clearDrawnSelections,
+        replaceSelections,
         undoLastSelection,
         removeSelection,
+        updateSelection,
         setFilterRange,
         addRouteFilter,
         removeRouteFilter,
-        setSortBy: handleSetSortBy,
-        setSortAscending: handleSetSortAscending,
+        resetFilterRanges,
+        chooseSort,
+        flipSort,
+        selectPath,
+        setHoveredPathId,
         nextPath,
         prevPath,
-        goToPath,
-        jumpPath,
-        goToFirst,
-        goToLast,
-        reverseCurrentPathProfile
+        reverseCurrentPathProfile,
+        showFavoritesOnly,
+        keepListed,
     };
 }

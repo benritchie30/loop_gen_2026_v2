@@ -1,0 +1,42 @@
+# Caddy configuration for the public site (installed as /etc/caddy/Caddyfile by setup.sh).
+# Caddy gets and renews the HTTPS certificate for the domain by itself; the domain's DNS
+# must point at this server and ports 80 and 443 must be open.
+#
+# loops.example.com is replaced with the real domain by setup.sh.
+
+loops.example.com {
+	encode zstd gzip
+
+	# The Python backend (listening on localhost only): the UI's WebSocket, and the
+	# health check for uptime monitors. Caddy passes WebSocket connections through and
+	# tells the backend the visitor's address (X-Forwarded-For, replacing any the
+	# visitor sent), which the per-visitor connection limit uses.
+	handle /ws {
+		reverse_proxy localhost:8765
+	}
+	handle /healthz {
+		reverse_proxy localhost:8765
+	}
+
+	# The built UI (npm run build). File names under /assets/ change with every
+	# build, so browsers may keep them for good (a missing one is a 404); every other
+	# path is the app itself (index.html), checked again on every visit.
+	handle /assets/* {
+		root * /opt/loop-finder/route-loop-finder/dist
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+	handle {
+		root * /opt/loop-finder/route-loop-finder/dist
+		header Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+	# No access log: visitors' requests are not recorded.
+}

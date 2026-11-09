@@ -23,7 +23,7 @@ export function useAppMode() {
     }, [pendingMarker]);
 
     const setMode = useCallback((newMode) => {
-        if (['input', 'display', 'drawing', 'graphCreate'].includes(newMode)) {
+        if (['input', 'display', 'drawing'].includes(newMode)) {
             setModeState(newMode);
             // We NO LONGER clear pendingMarker here.
             // It will be hidden by MapView when not in 'input' mode,
@@ -37,6 +37,11 @@ export function useAppMode() {
         }
     }, [mode]);
 
+    // Set the start pin whatever the mode (search result, location).
+    const placeMarker = useCallback((position) => {
+        setPendingMarker(position);
+    }, []);
+
     const clearPendingMarker = useCallback(() => {
         setPendingMarker(null);
     }, []);
@@ -46,6 +51,7 @@ export function useAppMode() {
         setMode,
         pendingMarker,
         setMarkerPosition,
+        placeMarker,
         clearPendingMarker
     };
 }

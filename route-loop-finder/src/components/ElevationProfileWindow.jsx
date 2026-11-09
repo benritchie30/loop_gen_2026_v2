@@ -1,6 +1,8 @@
 import { useMemo, useState, useRef, useEffect } from 'react';
 import { Minimize2, ArrowLeftRight } from 'lucide-react';
 import './ElevationProfileWindow.css';
+import { KM_PER_MI, M_PER_FT, useUnits } from '../utils/units';
+import { hoverPoint, useHoverPoint } from '../hooks/useHoverPoint';
 
 const CHART_WIDTH = 800;
 const CHART_HEIGHT = 200;
@@ -10,8 +12,22 @@ const PADDING = { top: 16, right: 24, bottom: 32, left: 48 };
  * Standalone window displaying elevation profile chart.
  * Centered at the bottom of the screen with larger dimensions.
  */
-function ElevationProfileWindow({ elevationProfile, onClose, hoveredPoint, onHover, onFlipPath }) {
-    const [zoomDomain, setZoomDomain] = useState(null); // [minDist, maxDist]
+function ElevationProfileWindow({ elevationProfile: rawProfile, onClose, onFlipPath }) {
+    // Shared with the map marker (hooks/useHoverPoint): either side can set it.
+    const hoveredPoint = useHoverPoint();
+    const onHover = (point) => hoverPoint.set(point ? { ...point, source: 'chart' } : null);
+    // The chart works in display units (km and m, or mi and ft). The profile
+    // and hoveredPoint shared with the map stay in miles and feet.
+    const units = useUnits();
+    const km = units === 'km';
+    const dScale = km ? KM_PER_MI : 1;
+    const eScale = km ? M_PER_FT : 1;
+    const elevationProfile = useMemo(
+        () => (km && rawProfile ? rawProfile.map((p) => [p[0] * KM_PER_MI, p[1] * M_PER_FT, ...p.slice(2)]) : rawProfile),
+        [rawProfile, km],
+    );
+    const [zoomDomain, setZoomDomain] = useState(null); // [minDist, maxDist] in display units
+    useEffect(() => { setZoomDomain(null); }, [km]);
     const [isDragging, setIsDragging] = useState(false);
     const [dragStart, setDragStart] = useState(null);
     const [dragCurrent, setDragCurrent] = useState(null);
@@ -91,7 +107,7 @@ function ElevationProfileWindow({ elevationProfile, onClose, hoveredPoint, onHov
 
         // Calculate grades (slope %)
         // Use a smoothing window to avoid noise from point-to-point fluctuations
-        const GRADE_SAMPLE_DIST = 0.05; // miles (approx 260ft)
+        const GRADE_SAMPLE_DIST = km ? 0.08 : 0.05; // about 260 ft
         let rawGrades = [];
 
         for (let i = 0; i < elevationProfile.length; i++) {
@@ -122,7 +138,7 @@ function ElevationProfileWindow({ elevationProfile, onClose, hoveredPoint, onHov
 
             let grade = 0;
             if (distMi > 0.0001) {
-                grade = (elevFt / (distMi * 5280)) * 100;
+                grade = (elevFt / (distMi * (km ? 1000 : 5280))) * 100;
             }
             rawGrades.push(grade);
         }
@@ -192,7 +208,7 @@ function ElevationProfileWindow({ elevationProfile, onClose, hoveredPoint, onHov
             grades, // full grades
             visibleGrades // for stats if needed
         };
-    }, [elevationProfile, zoomDomain]);
+    }, [elevationProfile, zoomDomain, km]);
 
     const getMouseX = (e) => {
         const rect = e.currentTarget.getBoundingClientRect();
@@ -210,7 +226,7 @@ function ElevationProfileWindow({ elevationProfile, onClose, hoveredPoint, onHov
         }
     };
 
-    const handleMouseUp = (e) => {
+    const handleMouseUp = () => {
         if (isDragging) {
             setIsDragging(false);
             if (Math.abs(dragCurrent - dragStart) > 5) {
@@ -257,46 +273,37 @@ function ElevationProfileWindow({ elevationProfile, onClose, hoveredPoint, onHov
         const points = chartData.dataPoints || elevationProfile;
         let closest = points[0];
         let minDiff = Math.abs(closest[0] - dist);
-        let idx = 0;
 
         for (let i = 1; i < points.length; i++) {
             const diff = Math.abs(points[i][0] - dist);
             if (diff < minDiff) {
                 minDiff = diff;
                 closest = points[i];
-                idx = i;
-            }
-        }
-
-        // closest format: [dist_mi, elev_ft, lat, lng, bearing]
-
-        // Calculate grade
-        let grade = 0;
-        if (chartData.grades && chartData.grades.length > 0) {
-            // Grades should map to the visible segments if we recalculated them for visible range
-            // But wait, 'grades' in chartData is the FULL grades array (see return object). 
-            // 'visibleGrades' is the subset.
-            // 'points' is visible subset (dataPoints).
-            // 'idx' is index in 'points'.
-
-            // If we use visibleGrades, it maps 1:1 to points.
-            if (chartData.visibleGrades && idx < chartData.visibleGrades.length) {
-                grade = chartData.visibleGrades[idx];
-            } else {
-                // Fallback
-                const gradeIdx = Math.min(Math.max(0, idx), chartData.grades.length - 1);
-                grade = chartData.grades[gradeIdx];
             }
         }
 
         onHover({
-            distance: closest[0],
-            elevation: closest[1],
+            distance: closest[0] / dScale,
+            elevation: closest[1] / eScale,
             coordinate: [closest[2], closest[3]],
             bearing: closest[4],
-            grade: grade
         });
     };
+
+    // Grade at the hovered distance (from the map or the chart).
+    const hoverGrade = useMemo(() => {
+        if (!hoveredPoint || !chartData?.grades?.length) return null;
+        const d = hoveredPoint.distance * dScale;
+        let lo = 0;
+        let hi = elevationProfile.length - 1;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (elevationProfile[mid][0] < d) lo = mid + 1;
+            else hi = mid;
+        }
+        if (lo > 0 && Math.abs(elevationProfile[lo - 1][0] - d) < Math.abs(elevationProfile[lo][0] - d)) lo -= 1;
+        return chartData.grades[lo] ?? null;
+    }, [hoveredPoint, chartData, elevationProfile, dScale]);
 
     const handleMouseLeave = () => {
         onHover(null);
@@ -310,67 +317,65 @@ function ElevationProfileWindow({ elevationProfile, onClose, hoveredPoint, onHov
         <div className="elevation-window">
             <div className="elevation-window__content">
                 <div className="elevation-window__header">
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                        <h3>Elevation Profile</h3>
-                        <div className="elevation-window__stats">
-                            <div className="elevation-window__stat">
-                                <span>Dist:</span>
-                                <span className="elevation-window__stat-value">
-                                    {hoveredPoint ? hoveredPoint.distance.toFixed(2) : '-.--'} mi
-                                </span>
-                            </div>
-                            <div className="elevation-window__stat">
-                                <span>Elev:</span>
-                                <span className="elevation-window__stat-value">
-                                    {hoveredPoint ? Math.round(hoveredPoint.elevation) : '---'} ft
-                                </span>
-                            </div>
-                            {showGrade && (
-                                <div className="elevation-window__stat">
-                                    <span>Grade:</span>
-                                    <span className={`elevation-window__stat-value ${hoveredPoint
-                                        ? (hoveredPoint.grade >= 0 ? 'elevation-window__stat-value--grade-pos' : 'elevation-window__stat-value--grade-neg')
-                                        : ''
-                                        }`}>
-                                        {hoveredPoint ? `${Math.abs(hoveredPoint.grade).toFixed(1)}%` : '--.-%'}
-                                    </span>
-                                </div>
-                            )}
+                    <h3>Elevation</h3>
+                    <div className="elevation-window__stats">
+                        <div className="elevation-window__stat">
+                            <span>Distance</span>
+                            <span className="elevation-window__stat-value">
+                                {hoveredPoint ? (hoveredPoint.distance * dScale).toFixed(2) : '–'} {km ? 'km' : 'mi'}
+                            </span>
+                        </div>
+                        <div className="elevation-window__stat">
+                            <span>Elevation</span>
+                            <span className="elevation-window__stat-value">
+                                {hoveredPoint ? Math.round(hoveredPoint.elevation * eScale).toLocaleString() : '–'} {km ? 'm' : 'ft'}
+                            </span>
+                        </div>
+                        <div className="elevation-window__stat">
+                            <span>Grade</span>
+                            <span className={`elevation-window__stat-value ${hoverGrade != null
+                                ? (hoverGrade >= 0 ? 'elevation-window__stat-value--grade-pos' : 'elevation-window__stat-value--grade-neg')
+                                : ''
+                                }`}>
+                                {hoverGrade != null ? `${hoverGrade >= 0 ? '+' : '−'}${Math.abs(hoverGrade).toFixed(1)}%` : '–'}
+                            </span>
                         </div>
                     </div>
                     <div className="elevation-window__controls">
                         <button
                             className={`elevation-window__flip-btn ${showGrade ? 'active' : ''}`}
                             onClick={() => setShowGrade(!showGrade)}
-                            title="Toggle Grade Display"
+                            title="Show the grade line on the chart"
                         >
-                            <span style={{ fontSize: '14px', fontWeight: 'bold' }}>%</span>
-                            Grade
+                            <span className="elevation-window__pct">%</span>
+                            Grade line
                         </button>
-                        <button
-                            className="elevation-window__flip-btn"
-                            onClick={onFlipPath}
-                            title="Flip Path Direction"
-                        >
-                            <ArrowLeftRight size={16} />
-                            Reverse Path
-                        </button>
+                        {onFlipPath && (
+                            <button
+                                className="elevation-window__flip-btn"
+                                onClick={onFlipPath}
+                                title="Ride it the other way (flips the profile)"
+                            >
+                                <ArrowLeftRight size={14} />
+                                Reverse
+                            </button>
+                        )}
                         {zoomDomain && (
                             <button
                                 className="elevation-window__flip-btn"
                                 onClick={() => setZoomDomain(null)}
                                 title="Reset Zoom"
                             >
-                                <Minimize2 size={16} style={{ transform: 'rotate(45deg)' }} />
+                                <Minimize2 size={14} style={{ transform: 'rotate(45deg)' }} />
                                 Reset Zoom
                             </button>
                         )}
                         <button
                             className="elevation-window__close"
                             onClick={onClose}
-                            title="Minimize"
+                            title="Hide (E)"
                         >
-                            <Minimize2 size={18} />
+                            <Minimize2 size={16} />
                         </button>
                     </div>
                 </div>
@@ -531,9 +536,9 @@ function ElevationProfileWindow({ elevationProfile, onClose, hoveredPoint, onHov
                         {/* Hover Cursor Line */}
                         {hoveredPoint && (
                             <line
-                                x1={chartData.scaleX(hoveredPoint.distance)}
+                                x1={chartData.scaleX(hoveredPoint.distance * dScale)}
                                 y1={PADDING.top}
-                                x2={chartData.scaleX(hoveredPoint.distance)}
+                                x2={chartData.scaleX(hoveredPoint.distance * dScale)}
                                 y2={chartData.bottomY}
                                 stroke="var(--color-text)"
                                 strokeWidth="1"
@@ -551,7 +556,7 @@ function ElevationProfileWindow({ elevationProfile, onClose, hoveredPoint, onHov
                             fontSize="12"
                             fill="var(--color-text-muted)"
                         >
-                            Distance (miles)
+                            Distance ({km ? 'km' : 'miles'})
                         </text>
 
                         <text
@@ -562,7 +567,7 @@ function ElevationProfileWindow({ elevationProfile, onClose, hoveredPoint, onHov
                             fill="var(--color-text-muted)"
                             transform={`rotate(-90 16 ${PADDING.top + chartData.plotH / 2})`}
                         >
-                            Elev (ft)
+                            Elev ({km ? 'm' : 'ft'})
                         </text>
                         {/* Right Y-axis (Grade) */}
                         {showGrade && (
@@ -576,14 +581,6 @@ function ElevationProfileWindow({ elevationProfile, onClose, hoveredPoint, onHov
                                     strokeWidth="1"
                                 />
 
-                                {/* Right Y-axis Ticks (Grade) */}
-                                <g>
-                                    {/* We need simple ticks for grade. 0, min, max? 
-                                         Let's do 5 ticks based on gradeYMin/Max */}
-                                    {[0, 0.25, 0.5, 0.75, 1].map((pct, i) => {
-                                        return null;
-                                    })}
-                                </g>
 
                                 <text
                                     x={PADDING.left + chartData.plotW + 16}

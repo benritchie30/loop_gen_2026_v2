@@ -2,14 +2,12 @@ import pickle
 import os
 import json
 import math
-from datetime import datetime
 import osmnx as ox
 import networkx as nx
 from shapely.geometry import Polygon, Point, LineString
 from shapely.ops import unary_union
 from shapely.prepared import prep
 import geopandas as gpd
-import matplotlib.pyplot as plt
 import srtm
 from road_stress import annotate_edge_stress
 
@@ -145,9 +143,20 @@ class GraphManager:
         return self._graph
 
     def get_nearest_node(self, lat: float, lng: float):
-        """Finds the nearest node to the given coordinates."""
+        """Finds the nearest node to the given coordinates.
+
+        osmnx needs scikit-learn for unprojected graphs; without it, a plain
+        scan of the node coordinates gives the same answer (graphs are small).
+        """
         G = self.get_graph()
-        return ox.nearest_nodes(G, lng, lat)
+        try:
+            return ox.nearest_nodes(G, lng, lat)
+        except ImportError:
+            k = math.cos(math.radians(lat))
+            return min(
+                (n for n, d in G.nodes(data=True) if 'x' in d and 'y' in d),
+                key=lambda n: (G.nodes[n]['y'] - lat) ** 2 + ((G.nodes[n]['x'] - lng) * k) ** 2,
+            )
 
 
     @staticmethod
@@ -277,83 +286,6 @@ class GraphManager:
         if edges_to_remove:
             G.remove_edges_from(edges_to_remove)
             print(f"  Removed {len(edges_to_remove)} redundant multi-edges.")
-
-    @staticmethod
-    def _debug_plot_graph(G, title, filepath, highlight_nodes=None):
-        """Plot nodes+edges; red overlay = about to be removed/merged. Saves PNG and tries to show a window."""
-        highlight_nodes = set(highlight_nodes or [])
-        print(f"  [plot] {title}")
-        print(f"         -> {filepath}")
-        if G.number_of_nodes() == 0:
-            print("  [plot] skip (empty graph)")
-            return
-
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-
-        try:
-            fig, ax = ox.plot_graph(
-                G,
-                node_color='#2980b9',
-                node_size=8,
-                edge_color='#7f8c8d',
-                edge_linewidth=1.0,
-                bgcolor='white',
-                figsize=(12, 12),
-                show=False,
-                close=False,
-            )
-            if highlight_nodes:
-                H = G.subgraph(highlight_nodes)
-                if H.number_of_nodes() > 0:
-                    ox.plot_graph(
-                        H,
-                        ax=ax,
-                        node_color='#c0392b',
-                        node_size=22,
-                        edge_color='#e74c3c',
-                        edge_linewidth=2.0,
-                        bgcolor='white',
-                        show=False,
-                        close=False,
-                    )
-            ax.set_title(title, fontsize=11)
-            fig.savefig(filepath, dpi=150, bbox_inches='tight')
-            plt.show(block=True)
-            plt.close(fig)
-        except Exception as e:
-            print(f"  [plot] failed ({e}).")
-            try:
-                plt.close('all')
-            except Exception:
-                pass
-
-    @staticmethod
-    def _degree2_nodes(G):
-        G_undir = G.to_undirected()
-        return {n for n, d in G_undir.degree() if d == 2}
-
-    @staticmethod
-    def _consolidation_cluster_nodes(G, tolerance=15):
-        """Nodes whose projected buffers overlap (approx what consolidate_intersections merges)."""
-        if G.number_of_nodes() < 2:
-            return set()
-        G_proj = ox.project_graph(G)
-        gdf = ox.graph_to_gdfs(G_proj, nodes=True, edges=False)
-        undir = G.to_undirected()
-        # dead_ends=False in consolidate_intersections skips degree-1 nodes
-        eligible = gdf.loc[[n for n in gdf.index if undir.degree(n) > 1]]
-        if eligible.empty:
-            return set()
-        buffered = eligible.buffer(tolerance)
-        merged = unary_union(list(buffered.geometry))
-        geoms = list(merged.geoms) if hasattr(merged, 'geoms') else [merged]
-        clusters = gpd.GeoDataFrame(geometry=geoms, crs=eligible.crs)
-        joined = gpd.sjoin(eligible, clusters, predicate='intersects')
-        sizes = joined.groupby('index_right').size()
-        multi = set(sizes[sizes > 1].index)
-        if not multi:
-            return set()
-        return set(joined[joined['index_right'].isin(multi)].index)
 
     @staticmethod
     def _compute_biconnected_prune_nodes(G, min_component_length):
@@ -501,19 +433,8 @@ class GraphManager:
 
     @staticmethod
     def _process_graph(G, debug_name="graph"):
-        """Full graph simplification pipeline: prune, consolidate, simplify."""
+        """Full graph simplification pipeline: prune, score, merge degree-2 nodes."""
         print(f"\n=== Processing Graph ({len(G.nodes)} nodes, {len(G.edges)} edges) ===")
-
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        plot_dir = os.path.join(os.path.dirname(__file__), "simp_debug", f"{debug_name}_{stamp}")
-        os.makedirs(plot_dir, exist_ok=True)
-        print(f"  Simplification plots: {plot_dir}")
-        print("  Close each plot window to continue to the next stage.")
-
-        def plot(filename, title, graph, highlight=None):
-            GraphManager._debug_plot_graph(
-                graph, title, os.path.join(plot_dir, filename), highlight
-            )
 
         # 1. Strip non-essential edge attributes
         whitelist = EDGE_ATTR_WHITELIST
@@ -521,70 +442,20 @@ class GraphManager:
             for key in [k for k in list(data.keys()) if k not in whitelist]:
                 data.pop(key)
 
-        plot("00_initial.png", "Initial graph (after OSM download + attr strip)", G)
-
         # 2. Prune dead ends and tiny loops
-        min_comp = 3000
-        prune_nodes = GraphManager._compute_biconnected_prune_nodes(G, min_comp)
-        if prune_nodes is None:
-            print("  WARNING: No large components found. Skipping pruning.")
-            plot("01_prune_skipped.png", "Prune skipped (no large components)", G)
-        else:
-            plot(
-                "01_prune_will_remove.png",
-                f"Prune (min_component_length={min_comp}m): red = nodes/edges to remove",
-                G,
-                prune_nodes,
-            )
-            GraphManager._prune_graph_biconnected(G, min_component_length=min_comp)
-            plot("02_prune_after.png", "After prune", G)
+        GraphManager._prune_graph_biconnected(G, min_component_length=3000)
 
-        # 3. Consolidate complex intersections
-        # print("  Consolidating intersections...")
-        # cons_nodes = GraphManager._consolidation_cluster_nodes(G, tolerance=25)
-        # plot(
-        #     "03_consolidate_will_merge.png",
-        #     "Consolidate intersections (15m): red = nodes in merge clusters",
-        #     G,
-        #     cons_nodes,
-        # )
-        # G_proj = ox.project_graph(G)
-        # G_proj_cons = ox.simplification.consolidate_intersections(
-        #     G_proj, rebuild_graph=True, tolerance=25, dead_ends=False
-        # )
-        # G = ox.project_graph(G_proj_cons, to_crs='epsg:4326')
-        # print(f"  After consolidation: {len(G.nodes)} nodes, {len(G.edges)} edges")
-        # plot("04_consolidate_after.png", "After intersection consolidation", G)
-
-        # 4. Keep only shortest edge between node pairs
+        # 3. Keep only shortest edge between node pairs (intended, not enabled yet)
         # GraphManager._keep_shortest_edge(G)
 
-        # 5. Score edges before degree-2 merge so each block keeps its own class.
+        # 4. Score edges before degree-2 merge so each block keeps its own class.
         annotate_edge_stress(G)
 
-        # 6. Merge degree-2 nodes
-        deg2 = GraphManager._degree2_nodes(G)
-        plot(
-            "05_topology_will_merge.png",
-            "Topology simplify: red = degree-2 nodes to merge",
-            G,
-            deg2,
-        )
+        # 5. Merge degree-2 nodes
         GraphManager._simplify_graph_topology(G)
-        plot("06_topology_after.png", "After merging degree-2 nodes", G)
 
-        # 7. Remove self-loops and isolates
-        # G.remove_edges_from(list(nx.selfloop_edges(G)))
-        isolates = list(nx.isolates(G))
-        if isolates:
-            plot(
-                "07_isolates_will_remove.png",
-                "Isolates: red = nodes to remove",
-                G,
-                isolates,
-            )
-        G.remove_nodes_from(isolates)
-        plot("08_final.png", "After isolate removal (final simplified graph)", G)
+        # 6. Remove isolates
+        G.remove_nodes_from(list(nx.isolates(G)))
 
         print(f"=== Processing complete: {len(G.nodes)} nodes, {len(G.edges)} edges ===\n")
         return G

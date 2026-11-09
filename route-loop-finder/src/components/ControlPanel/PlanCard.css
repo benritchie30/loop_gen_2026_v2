@@ -1,0 +1,142 @@
+/* Plan a loop: start status, length, roads, through / avoid, Find loops. */
+.plan-card {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.area-status {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 9px;
+    background: var(--color-surface);
+    font-size: 12px;
+    line-height: 1.35;
+    color: var(--color-text-muted);
+}
+
+.area-status__dot {
+    flex: 0 0 8px;
+    height: 8px;
+    margin-top: 4px;
+    border-radius: 50%;
+    background: var(--color-text-muted);
+}
+
+.area-status__text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.area-status__text strong {
+    color: var(--color-text);
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.area-status--checking .area-status__dot,
+.area-status--download .area-status__dot,
+.area-status--build .area-status__dot,
+.area-status--queue .area-status__dot {
+    background: var(--color-primary);
+    animation: pulse-dot 1s infinite;
+}
+
+.area-status--download,
+.area-status--build,
+.area-status--queue {
+    color: var(--color-primary);
+}
+
+.area-status--ready .area-status__dot {
+    background: #16a34a;
+}
+
+.area-status--ready {
+    color: #15803d;
+}
+
+.area-status--error .area-status__dot {
+    background: #dc2626;
+}
+
+.area-status--error {
+    color: #b91c1c;
+}
+
+/* Loops from here: add to a generation that starts at the pin, or a new one */
+.start-choice__list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 132px;
+    overflow-y: auto;
+    margin-top: 4px;
+}
+
+.start-choice__row {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    column-gap: 8px;
+    align-items: center;
+    padding: 5px 8px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+.start-choice__row:hover {
+    background: var(--color-surface);
+}
+
+.start-choice__row.is-active {
+    border-color: var(--color-primary);
+    background: var(--color-primary-light);
+}
+
+.start-choice__row input {
+    grid-row: span 2;
+    margin: 0;
+    accent-color: var(--color-primary);
+}
+
+.start-choice__name {
+    font-size: 13px;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.start-choice__meta {
+    font-size: 11px;
+    color: var(--color-text-muted);
+}
+
+/* Search area: automatic, or a saved custom boundary */
+.search-area__row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.search-area__row select {
+    flex: 1 1 auto;
+    min-width: 0;
+    font: inherit;
+    font-size: 13px;
+    padding: 6px 8px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: var(--color-bg);
+    color: var(--color-text);
+}
+
+.search-area__warn {
+    color: #b45309;
+}

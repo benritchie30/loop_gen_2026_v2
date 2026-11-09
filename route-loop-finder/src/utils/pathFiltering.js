@@ -1,15 +1,34 @@
 import { sortBySimilarity } from './routeSelections';
+import { formatClimb, formatClimbRate, formatDistance } from './units';
 
 /**
  * Sort-by fields that can also be range filters. Similar routes is excluded.
  * Slider ends come from the active route set; `decimals` sets the step.
+ * Values are in stored units (miles, feet); format(value, units) displays them.
  */
 export const FILTER_METRICS = [
     {
         key: 'total_miles',
-        label: 'Distance',
+        label: 'Length',
         decimals: 1,
-        format: (value) => `${value.toFixed(1)} mi`,
+        format: (value, units) => formatDistance(value, units),
+    },
+    {
+        key: 'climb_rate',
+        label: 'Climb rate',
+        decimals: 0,
+        format: (value, units) => formatClimbRate(value, units),
+        derive: (path) => {
+            const climb = propertyValue(path, 'total_climb_ft');
+            const miles = propertyValue(path, 'total_miles');
+            return climb != null && miles > 0 ? climb / miles : null;
+        },
+    },
+    {
+        key: 'total_climb_ft',
+        label: 'Total climb',
+        decimals: 0,
+        format: (value, units) => formatClimb(value, units),
     },
     {
         key: 'difficulty',
@@ -18,31 +37,14 @@ export const FILTER_METRICS = [
         format: (value) => value.toFixed(1),
     },
     {
-        key: 'total_climb_ft',
-        label: 'Total Climbing Distance',
-        decimals: 0,
-        format: (value) => `${Math.round(value)} ft`,
-    },
-    {
-        key: 'climb_rate',
-        label: 'Climb Rate',
-        decimals: 0,
-        format: (value) => `${Math.round(value)} ft/mi`,
-        derive: (path) => {
-            const climb = propertyValue(path, 'total_climb_ft');
-            const miles = propertyValue(path, 'total_miles');
-            return climb != null && miles > 0 ? climb / miles : null;
-        },
-    },
-    {
         key: 'loop_ratio',
-        label: 'Loop Path Percentage',
+        label: 'Loop share',
         decimals: 2,
         format: (value) => `${Math.round(value * 100)}%`,
     },
     {
         key: 'turns',
-        label: 'Number of Turns',
+        label: 'Turns',
         decimals: 0,
         format: (value) => String(Math.round(value)),
     },

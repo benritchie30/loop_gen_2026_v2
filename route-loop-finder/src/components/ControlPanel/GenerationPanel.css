@@ -1,0 +1,729 @@
+/* ==========================================================================
+   An open generation: header, tools, sort + filters, route cards (their own
+   scroll area), More routes.
+   ========================================================================== */
+
+.gen-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+}
+
+.gen-panel__header {
+    display: flex;
+    align-items: flex-start;
+    gap: 2px;
+    padding: 10px 8px 8px 6px;
+    flex: 0 0 auto;
+}
+
+.gen-panel__title {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 3px 0 0 2px;
+}
+
+.gen-panel__name {
+    display: block;
+    max-width: 100%;
+    padding: 0;
+    border: none;
+    background: none;
+    font-size: 15px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    color: var(--color-text);
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: text;
+}
+
+.gen-panel__name-input {
+    width: 100%;
+    font: inherit;
+    font-size: 15px;
+    font-weight: 600;
+    padding: 2px 4px;
+    border: 1px solid var(--color-primary);
+    border-radius: 5px;
+    outline: none;
+}
+
+.gen-panel__sub {
+    margin-top: 2px;
+    font-size: 12px;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.gen-menu {
+    position: relative;
+}
+
+.gen-settings {
+    padding: 8px 16px;
+    border-top: 1px solid var(--color-border);
+    background: var(--color-surface);
+    flex: 0 0 auto;
+}
+
+.gen-settings__row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 12px;
+    padding: 2px 0;
+    color: var(--color-text-muted);
+}
+
+.gen-settings__row span:last-child {
+    color: var(--color-text);
+    text-align: right;
+}
+
+.gen-panel > .panel-section {
+    border-top: 1px solid var(--color-border);
+}
+
+/* ---- sort and filters ---- */
+
+.gen-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.sort-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.sort-row .section-label {
+    width: 40px;
+}
+
+.filter {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.filter__head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 20px;
+}
+
+.filter__label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-text);
+}
+
+.filter__value,
+.filter__note {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.filter__value.is-narrowed {
+    color: var(--color-primary);
+    font-weight: 600;
+}
+
+.filters-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 18px;
+}
+
+/* "+ Filter": a link-looking label over an invisible native select. */
+.add-filter {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--color-primary);
+    cursor: pointer;
+}
+
+.add-filter select {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    opacity: 0;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.add-filter:hover span {
+    text-decoration: underline;
+}
+
+/* ---- route cards ---- */
+
+.gen-routes {
+    flex: 1 1 auto;
+    min-height: 140px;
+    display: flex;
+    flex-direction: column;
+    border-top: 1px solid var(--color-border);
+    background: var(--color-surface);
+}
+
+.route-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 12px;
+    flex: 0 0 auto;
+}
+
+.route-nav .icon-btn--boxed {
+    background: var(--color-bg);
+    width: 34px;
+    height: 28px;
+}
+
+.route-nav__label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-text);
+    font-variant-numeric: tabular-nums;
+}
+
+.route-list {
+    position: relative; /* offsetTop of the cards, to keep the selected one in the middle */
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 4px 12px 12px;
+    overscroll-behavior: contain;
+    /* Cards fade out under the edges instead of being cut. */
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 10px, #000 calc(100% - 14px), transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 10px, #000 calc(100% - 14px), transparent 100%);
+}
+
+.route-card {
+    flex: 0 0 auto;
+    padding: 8px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    cursor: pointer;
+    background: var(--color-bg);
+    transition: border-color 120ms, box-shadow 120ms;
+}
+
+.route-card:hover {
+    border-color: var(--color-primary);
+}
+
+.route-card.is-selected {
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 1px var(--color-primary), 0 4px 12px rgba(15, 23, 42, 0.08);
+}
+
+.route-card:focus {
+    outline: none;
+}
+
+.route-card__row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.route-card__num {
+    flex: 0 0 22px;
+    height: 22px;
+    border-radius: 11px;
+    background: var(--color-surface);
+    font-size: 11px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.route-card.is-selected .route-card__num {
+    background: var(--color-primary);
+    color: #fff;
+}
+
+.route-card__main {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 14px;
+    color: var(--color-text);
+    white-space: nowrap;
+}
+
+.route-card__climb {
+    font-size: 12px;
+    color: var(--color-text-muted);
+}
+
+.route-card__meta {
+    display: flex;
+    gap: 10px;
+    margin: 2px 0 0 30px;
+    font-size: 11px;
+    color: var(--color-text-muted);
+}
+
+.route-card__details {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px 8px;
+    margin: 8px 0 0;
+    padding-top: 8px;
+    border-top: 1px solid var(--color-border);
+    cursor: default;
+}
+
+.route-card__details dt {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+}
+
+.route-card__details dd {
+    margin: 1px 0 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text);
+    font-variant-numeric: tabular-nums;
+}
+
+.sparkline {
+    flex: 0 0 auto;
+}
+
+.sparkline__area {
+    fill: var(--color-primary-light, #dbe6f7);
+    opacity: 0.8;
+}
+
+.sparkline__line {
+    fill: none;
+    stroke: var(--color-primary);
+    stroke-width: 1.2;
+}
+
+.gen-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 12px 4px;
+    font-size: 13px;
+    color: var(--color-text-muted);
+}
+
+/* ---- More routes ---- */
+
+.gen-more {
+    flex: 0 0 auto;
+    padding: 10px 12px 12px;
+    border-top: 1px solid var(--color-border);
+    background: var(--color-bg);
+}
+
+.gen-more__options {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.gen-more__row {
+    display: flex;
+    gap: 8px;
+}
+
+.gen-more__go {
+    flex: 1 1 auto;
+}
+
+.gen-more__settings {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 36px;
+    padding: 0 8px 0 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 9px;
+    background: var(--color-bg);
+    font-size: 12px;
+    color: var(--color-text);
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.gen-more__settings:hover {
+    border-color: var(--color-primary);
+}
+
+.gen-more__settings svg {
+    color: var(--color-text-muted);
+    transition: transform var(--transition-fast);
+}
+
+.gen-more__settings.is-open svg {
+    transform: rotate(180deg);
+}
+
+.busy {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 36px;
+    padding: 0 12px;
+    border-radius: 9px;
+    background: var(--color-surface);
+    font-size: 13px;
+    color: var(--color-primary);
+}
+
+.busy__dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--color-primary);
+    animation: pulse-dot 1s infinite;
+    flex: 0 0 auto;
+}
+
+.busy__text {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ---- Your loops (plan view) ---- */
+
+.gen-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-height: 0;
+    flex: 1 1 auto;
+}
+
+.gen-list__scroll {
+    list-style: none;
+    margin: 0 -8px;
+    padding: 0;
+    min-height: 0;
+    flex: 0 1 auto;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    overscroll-behavior: contain;
+}
+
+.gen-list__row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding-right: 4px;
+    border-radius: 8px;
+    flex: 0 0 auto;
+}
+
+.gen-list__row:hover {
+    background: var(--color-surface);
+}
+
+.gen-list__open {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 6px 8px;
+    border: none;
+    background: none;
+    text-align: left;
+    cursor: pointer;
+}
+
+.gen-list__name {
+    max-width: 100%;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--color-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.gen-list__meta {
+    font-size: 11px;
+    color: var(--color-text-muted);
+}
+
+.gen-list__action {
+    opacity: 0;
+}
+
+.gen-list__row:hover .gen-list__action,
+.gen-list__action:focus-visible {
+    opacity: 1;
+}
+
+.gen-list__edit {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 4px 4px 6px;
+}
+
+.gen-list__input {
+    flex: 1 1 auto;
+    min-width: 0;
+    font: inherit;
+    font-size: 13px;
+    padding: 4px 6px;
+    border: 1px solid var(--color-primary);
+    border-radius: 6px;
+    outline: none;
+}
+
+/* Favorites: the favorite colour is the theme colour's complement (App sets it). */
+.route-card.is-favorite {
+    border-color: var(--color-favorite);
+    box-shadow: inset 3px 0 0 var(--color-favorite);
+}
+
+.route-card__star,
+.route-nav__star {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: none;
+    padding: 3px;
+    border-radius: 6px;
+    color: var(--color-text-muted);
+    cursor: pointer;
+}
+
+.route-card__star {
+    flex: 0 0 auto;
+    opacity: 0.45;
+}
+
+.route-card:hover .route-card__star,
+.route-card__star:focus-visible {
+    opacity: 1;
+}
+
+.route-card__star:hover,
+.route-nav__star:hover {
+    background: var(--color-surface);
+}
+
+.route-card__star.is-on,
+.route-nav__star.is-on {
+    color: var(--color-favorite);
+    opacity: 1;
+}
+
+.route-nav__label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.fav-toggle {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    background: var(--color-bg);
+    color: var(--color-text-muted);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.fav-toggle:hover {
+    border-color: var(--color-favorite);
+}
+
+.fav-toggle.is-on {
+    border-color: var(--color-favorite);
+    background: var(--color-favorite-light);
+    color: var(--color-favorite);
+    font-weight: 600;
+}
+
+.fav-toggle__count {
+    font-variant-numeric: tabular-nums;
+}
+
+/* The plan's Your loops / Favorites tabs */
+.plan-tabs {
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    border-radius: 8px;
+    background: var(--color-surface);
+}
+
+.plan-tabs button {
+    flex: 1 1 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 5px 8px;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-text-muted);
+    cursor: pointer;
+}
+
+.plan-tabs button.is-active {
+    background: var(--color-bg);
+    color: var(--color-text);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.1);
+}
+
+.plan-tabs__count {
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-text-muted);
+}
+
+/* Favorites tab: every favorite, grouped by start */
+.fav-list {
+    min-height: 0;
+    flex: 0 1 auto;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0 -4px;
+    padding: 0 4px;
+}
+
+.fav-list__empty {
+    padding: 8px 2px;
+}
+
+.fav-group__head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 2px 4px;
+}
+
+.fav-group__title {
+    flex: 0 1 auto;
+    min-width: 0;
+    font-size: 12px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fav-group__count {
+    font-size: 11px;
+    color: var(--color-text-muted);
+}
+
+.fav-group__action {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    white-space: nowrap;
+}
+
+.fav-group__rows {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.fav-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    cursor: pointer;
+    background: var(--color-bg);
+}
+
+.fav-row:hover {
+    border-color: var(--color-favorite);
+}
+
+.fav-row.is-selected {
+    border-color: var(--color-favorite);
+    box-shadow: inset 3px 0 0 var(--color-favorite);
+    background: var(--color-favorite-light);
+}
+
+.fav-row__main {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 13px;
+}
+
+.fav-row__climb {
+    font-size: 11px;
+    color: var(--color-text-muted);
+}
+
+.fav-row .sparkline {
+    margin-left: auto;
+}

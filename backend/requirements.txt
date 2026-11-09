@@ -1,9 +1,5 @@
-osmnx
 networkx
-websockets
-numpy
-pandas
-geopandas
+websockets>=14  # server.py uses the asyncio server of websockets 14+
 shapely
-scipy
-matplotlib
+pyproj
+SRTM.py

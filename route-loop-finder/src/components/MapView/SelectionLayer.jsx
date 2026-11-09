@@ -1,104 +1,134 @@
-import { Fragment, useEffect } from 'react';
-import { Circle, CircleMarker, Polygon, Rectangle, useMap } from 'react-leaflet';
+import { Fragment, useMemo } from 'react';
+import { Circle, CircleMarker, Polygon, Polyline, Rectangle } from 'react-leaflet';
+import { AREA_STYLE, ROAD_COLORS, paintColor } from '../../utils/roadColors';
+import { areaEdges } from '../../utils/graphRoads';
+import { isOutlinedArea, paintedKeys } from '../../utils/paintRoads';
 
-function outlineStyle(selection, isLatest) {
-    const exclude = selection.type === 'exclude';
-    return {
-        color: exclude ? '#b56b6b' : '#6e8cae',
-        weight: isLatest ? 2 : 1,
-        opacity: isLatest ? 0.9 : 0.38,
-        dashArray: '4 6',
-        fillColor: exclude ? '#b56b6b' : '#6e8cae',
-        fillOpacity: isLatest ? 0.06 : 0.025,
-    };
-}
-
-function DoubleClickZoomLock({ locked }) {
-    const map = useMap();
-    useEffect(() => {
-        if (locked) map.doubleClickZoom.disable();
-        else map.doubleClickZoom.enable();
-        return () => map.doubleClickZoom.enable();
-    }, [map, locked]);
+/** A dotted area outline (circle, box, or freeform). */
+function Outline({ outline, style }) {
+    if (outline.shape === 'circle') {
+        return (
+            <Circle
+                center={[outline.lat, outline.lng]}
+                radius={outline.radiusM}
+                pathOptions={style}
+                pane="tools"
+                interactive={false}
+            />
+        );
+    }
+    if (outline.shape === 'box') {
+        return (
+            <Rectangle
+                bounds={[[outline.south, outline.west], [outline.north, outline.east]]}
+                pathOptions={style}
+                pane="tools"
+                interactive={false}
+            />
+        );
+    }
+    if (outline.shape === 'freeform' && outline.coordinates?.length >= 3) {
+        return <Polygon positions={outline.coordinates} pathOptions={style} pane="tools" interactive={false} />;
+    }
     return null;
 }
 
-/**
- * Committed pins and area outlines. The newest one is drawn a little stronger.
- */
-function SelectionLayer({ selections, onRemove, lockDoubleClick }) {
-    const lastIndex = selections.length - 1;
-
+/** The roads inside an excluded area, shown while the Road tool points into it. */
+function RevealedArea({ area, roadIndex, selections }) {
+    // Roads in the outline that are neither excluded by it nor painted by anything else: turned back on.
+    const allowed = useMemo(() => {
+        const painted = paintedKeys(selections);
+        return areaEdges(roadIndex, area.outline)
+            .filter((edge) => !painted.has(edge.key))
+            .map((edge) => edge.pts);
+    }, [roadIndex, area, selections]);
     return (
         <>
-            <DoubleClickZoomLock locked={lockDoubleClick || selections.some((sel) => sel.shape === 'point')} />
+            {allowed.length > 0 && (
+                <Polyline
+                    positions={allowed}
+                    pathOptions={{ color: ROAD_COLORS.allowed, weight: 4, opacity: 0.9, dashArray: '2 7', lineCap: 'round' }}
+                    pane="tools"
+                    interactive={false}
+                />
+            )}
+            {area.lines?.length > 0 && (
+                <Polyline
+                    positions={area.lines}
+                    pathOptions={{ color: ROAD_COLORS.exclude, weight: 5, opacity: 0.9, lineCap: 'round' }}
+                    pane="tools"
+                    interactive={false}
+                />
+            )}
+        </>
+    );
+}
+
+/**
+ * Painted roads and area outlines. Green dotted = routes must enter the area;
+ * red dotted = an excluded area (its red roads are shown only while the Road
+ * tool points inside it, `revealedAreaId`). Nothing here takes pointer
+ * events: double-click to remove is handled map-wide (PanInteractions).
+ */
+function SelectionLayer({ selections, roadIndex = null, revealedAreaId = null }) {
+    return (
+        <>
             {selections.map((selection, index) => {
-                const isLatest = index === lastIndex;
-                const style = outlineStyle(selection, isLatest);
                 const key = selection.id || index;
 
-                if (selection.shape === 'point' || selection.shape === 'circle') {
+                if (isOutlinedArea(selection)) {
                     return (
                         <Fragment key={key}>
-                            <Circle
-                                center={[selection.lat, selection.lng]}
-                                radius={selection.radiusM}
-                                pathOptions={style}
-                                pane="tools"
-                                interactive={false}
-                            />
-                            {selection.shape === 'point' && (
-                                <CircleMarker
-                                    center={[selection.lat, selection.lng]}
-                                    radius={isLatest ? 6 : 5}
-                                    pane="tools"
-                                    bubblingMouseEvents={false}
-                                    pathOptions={{
-                                        color: '#ffffff',
-                                        weight: 2,
-                                        fillColor: selection.type === 'exclude' ? '#b56b6b' : '#d08a3a',
-                                        fillOpacity: 0.95,
-                                    }}
-                                    eventHandlers={{
-                                        dblclick: (e) => {
-                                            if (e.originalEvent) e.originalEvent.stopPropagation();
-                                            onRemove(selection.id);
-                                        },
-                                    }}
-                                />
+                            <Outline outline={selection.outline} style={AREA_STYLE.exclude} />
+                            {selection.id === revealedAreaId && roadIndex && (
+                                <RevealedArea area={selection} roadIndex={roadIndex} selections={selections} />
                             )}
                         </Fragment>
                     );
                 }
 
-                if (selection.shape === 'box') {
+                // Painted roads: red = excluded, green = one required edge,
+                // dark green = a road group (any one of its edges will do).
+                if (selection.shape === 'edges') {
+                    if (!selection.lines?.length) return null;
                     return (
-                        <Rectangle
+                        <Polyline
                             key={key}
-                            bounds={[
-                                [selection.south, selection.west],
-                                [selection.north, selection.east],
-                            ]}
-                            pathOptions={style}
+                            positions={selection.lines}
+                            pathOptions={{ color: paintColor(selection), weight: 5, opacity: 0.9, lineCap: 'round' }}
                             pane="tools"
                             interactive={false}
                         />
                     );
                 }
 
-                if (selection.shape === 'freeform' && selection.coordinates?.length >= 3) {
+                // Pins are no longer made; generations saved with them still show them.
+                if (selection.shape === 'point') {
+                    const exclude = selection.type === 'exclude';
                     return (
-                        <Polygon
+                        <CircleMarker
                             key={key}
-                            positions={selection.coordinates}
-                            pathOptions={style}
+                            center={[selection.lat, selection.lng]}
+                            radius={6}
                             pane="tools"
                             interactive={false}
+                            pathOptions={{
+                                color: '#ffffff',
+                                weight: 2,
+                                fillColor: exclude ? ROAD_COLORS.exclude : '#d08a3a',
+                                fillOpacity: selection.pending ? 0.4 : 0.95,
+                            }}
                         />
                     );
                 }
 
-                return null;
+                return (
+                    <Outline
+                        key={key}
+                        outline={selection}
+                        style={selection.type === 'exclude' ? AREA_STYLE.exclude : AREA_STYLE.include}
+                    />
+                );
             })}
         </>
     );

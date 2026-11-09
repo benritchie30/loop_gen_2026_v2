@@ -1,0 +1,72 @@
+
+# Graph and pathfinding
+
+## Search
+
+`find_paths` dispatches via the `ALGORITHMS` registry in `loop_generator.py`. Keys:
+
+Every strategy is the Area Sweep in `loop_tree.py` with a different configuration. The app uses `tree_guided`; the others are hidden from the UI unless the server runs with `LOOP_DEV=1`, and stay for comparison in `tools/bench_search.py`. An unknown or removed name (old saved settings such as `pleasant_capped`) falls back to `tree_guided`. Route output (geometry, 50 m samples, elevation, centroid, properties, GeoJSON) lives in `route_features.py`.
+
+The best-first engines (`turns`, `turns_pruned`, `*_capped`, `pleasant_explore`), Jaccard dedup, and search debug snapshots were removed in the Phase 0 cleanup (see `BLUEPRINT.md`; the lab version is in git history).
+
+- `tree_loops` — separate module `loop_tree.py`, not the best-first core. Edge-state Dijkstra grows a best outbound tree and a best return tree (cost = turns + discomfort + `detour_weight`/mi + reuse penalty). Each junction pairs an arriving outbound route with a leaving return route (best 2 pairs per junction). The pair's walk is cut at the first revisited node into a lollipop (same closing rule as the core). A stem with a one-way edge returns via the return tree's route if it stays within 150 m of the stem. Stream order: (turns + discomfort)/mi × (1 + `explore_weight` × (1 − novelty)), novelty from 400 m cells already covered by sent loops. Every `round_every` sends, or when the next candidate is > 1.5× the best sent, both trees regrow with `reuse_weight`/mi on roads used by sent loops. Turns here use road direction within 25 m of the junction, not the node-to-node chord; on merged curvy edges the chord counts bends as turns. If that hug check fails, each stem edge without a reverse is returned by the shortest way round within 3 × its length + 150 m (split intersections), cached per edge.
+- `tree_cover` — `tree_loops` with policy `cover`. Area passes come first, best (turns + discomfort)/mi first. A loop is sent only if at least 3 of its 400 m cells are new and they make up at least 25% of its cells, then 10% in a second pass (`COVER_TIERS`). Loops worse than 3× the best sent are held back. A pass ends after 3 rounds in a row send nothing. Then everything held back streams in normal tree order, with no deferral. Trees keep regrowing until 3 dry rounds or 60 rounds, so a high path count lists every loop the trees can reach.
+- `tree_triangles` — `tree_loops` plus three-leg loops. Anchors are picked from the outbound tree: the best-reached junction per (route-distance band 15–45% of max × 16 directions), spread by direction first. Each round takes 4 anchors. A cross-leg tree continues the outbound route from the anchor, with +4 turns/mi on that route, and is paired with the return tree at junctions ≥ 25° (seen from the start) away from the anchor. Each anchor keeps its best 300 pairs. Same shape check and stream order. Roughly 2–3× slower than `tree_loops`; it finds the lowest-discomfort loops.
+- `loop_atlas` — three-leg + cover policy, with up to 1 turn/mi of seeded random road cost on rounds after the first, for alternatives away from used roads.
+- `tree_guided` — `tree_loops` for the first pass, then **resumable**: the generator never returns; when a pass runs dry (or Stop fires) it yields `idle(note)` (check with `is_idle`) and waits for `gen.send(request)`. The server keeps it parked per `pathSetId` (`MAX_SESSIONS` per connection) and `CONTINUE_GENERATION` sends the client's selections through `resolve_selections`: a pin → the nearest edge within `SNAP_MAX_M` (snapped position returned; else rejected), an area → every edge with a 50 m geometry sample inside it (same test as the client filter). Include selections become `require` (list of uid sets, a route must use an edge from each), excludes become `forbidden` (never entered by `grow_tree`, also checked on the finished lollipop). Memory of sent routes (`seen_paths`, centroids, `judged`, reuse penalty) carries across requests, so nothing repeats; candidates left in a discarded heap are un-judged first. Each request resets `best_qpm` and gets up to `GUIDE_MAX_ROUNDS` rounds, ending after `GUIDE_DRY_ROUNDS` dry rounds. One pin/area: `pair_up` limited to pairs arriving or leaving on its edges, plus a leg (the three-leg machinery with the pin's directed edges as anchors, `GUIDE_AREA_ANCHORS` spread by sector for an area). Several: visiting orders ranked by plain distance (all orders up to `GUIDE_FULL_ORDERS`, else CW/CCW/nearest-neighbour; orders longer than the max are dropped with a note), `GUIDE_ORDERS_PER_ROUND` a round. Each order is a chain of legs; a leg that must still reach another pin *hard*-blocks the edges and nodes of the route so far (a revisit would close the lollipop early and drop the later pin), the last leg and a per-chain return tree only get `LEG_AVOID`. Every leg tree is pruned with the plain distance still needed through the remaining pins and home. Guided legs use `max(detour_weight, GUIDE_DETOURS[0])` turns/mi and escalate through `GUIDE_DETOURS` on dry rounds; the reuse penalty they see is capped at `GUIDE_PENALTY_CAP` (routes through one pin pile it on few roads); `GUIDE_PER_ANCHOR` pairs are kept per leg since most lose to the doubled stem in shaping; deferral uses `GUIDE_DEFER_RATIO`. Finished lollipops are checked against every `require` set (stem counts) and `forbidden`. Routes carry `batch` and `via` (selection ids). A request with no includes is "more routes avoiding these". Any strategy can serve an additional search: the server resumes the parked `tree_guided` generator in place when the additional algorithm matches, else runs the chosen one fresh with `known_centroids` (and feeds the new centroids back to the parked one). Known limit: several pins need a single simple loop (or the stem) through all of them; on sparse rural graphs some feasible 3-pin combinations are missed, and the UI gets a note when the pins cannot fit the max at all.
+
+`explore_weight`, `detour_weight`, `reuse_weight` are optional on `START_GENERATION`; omitted means each strategy's default (tree: 2 / 0.3 / 1; explore: 1). `ALGORITHMS_LIST` carries `resumable` and `constraints` per strategy (`is_resumable`, `supports_constraints`).
+
+## Constraints
+
+`find_paths(..., require, forbidden, known_centroids)` works for every strategy. `require` is a list of undirected edge-id sets, each of which the finished lollipop must cross (stem counts); `forbidden` is a set no route may use; `known_centroids` are routes from elsewhere in the generation, rejected as near-duplicates by the usual centroid rule. `loop_tree.resolve_selections(G, selections)` builds them from client selections: `point` → nearest edge within `SNAP_MAX_M` (snapped position returned), `circle` / `box` / `freeform` → edges with a 50 m geometry sample inside, `edges` → `[u, v]` node pairs via `EdgeTable.uid_of`. A set that contains another (an edge and the road it lies on) is dropped as implied.
+
+Tree family: `forbidden` is never entered by `grow_tree`; a non-empty `require` runs the first pass as a guided pass (batch 0) with the leg / chain machinery described under `tree_guided`; a leg whose target the route already crossed on the way is skipped. When continuing a generation (known centroids or a request), a candidate rejected as a near-duplicate still adds reuse penalty to its roads, so a fresh tree run seeded with centroids moves on instead of re-finding what it already has.
+
+`backend/tools/bench_search.py` runs strategies headless and prints speed, coverage (400 m cells under loop portions), turns/mi (search count and a re-score of the full walk), and discomfort/mi; `--png` writes overview and per-route tiles to `backend/bench_out/`. `tools/check_search.py` (fixed scenarios compared with a recorded baseline) and `tools/check_server.py` (WebSocket end to end) are the regression checks. Test on `01` (Boone, sparse, rural) and `03` (Charlotte, dense, 16k nodes; 8–20 and 15–40 mi). The first strategy in a run pays the per-graph cache build, so its `first_s` is inflated.
+
+Class weights (turns per mile) can be overridden per search via `road_weights` and `rural_scale` on `START_GENERATION`; each search recomputes `stress` from them. Link classes follow their parent (`road` follows secondary, `bridleway` follows path).
+
+Do not invent new strategies without adding them to the registry.
+
+A turn is a ≥30° change of road direction (measured within 25 m of the junction). Immediate U-turns are skipped. Busy-road distance is added as turn-equivalents (`stress` per meter on each edge), so a mile on a primary sorts behind a neighborhood route with a few more corners.
+
+Discomfort for a yielded path is recomputed on the full lollipop (stem both ways). The reported turn count stays the one-way search count.
+
+`min_path_length` / `max_path_length` bound the whole route (stem out, loop, stem back), so reported `total_miles` stays inside the range. No point of a route can be farther than `max / 2` from the start.
+
+Per-edge 50 m samples (with SRTM elevation, or node elevations interpolated along the edge for `SRTM_RETRY_S` (10 min) after a failed SRTM download, then SRTM is tried again), and per-edge centroid sums are memoized per graph (weak-keyed, never pickled). Output is identical to recomputing (the stand-in samples of a paused SRTM are not memoized). Edge geometry falls back to v→u when a stem retraces a one-way u→v.
+
+Uniqueness: centroid dedup only (reject if the sampled-geometry centroid is within `min_dist_m` of a kept route). Known quirk: `_is_centroid_too_close` compares raw degrees without the cos(latitude) factor, so east–west the threshold is about 20% tighter than `min_dist_m`. Fixing it changes results, so do it on purpose.
+
+`min_loop_length` is 600 m (server and `find_paths` default).
+
+Node ids can be any integers (OSM ids included); nothing indexes by node id or builds per-node bitmasks.
+
+## Edge stress
+
+`road_stress.annotate_edge_stress` writes `stress` (turn-equivalents per meter). Class rates per mile: residential / living_street / tertiary / unclassified / cycleway / path / pedestrian / bridleway = 0; secondary and `road` = 1; secondary_link = 1.5; primary = 4; primary_link = 5; trunk = 12. A list of classes uses the higher rate.
+
+Modifiers apply only when the class rate is already > 0: real bike facility (`lane`, `track`, `opposite_lane`, `opposite_track`, `separate`) ×0.25; sharrows ×0.6; 4+ lanes ×1.5; 6+ lanes ×2; maxspeed ≥ 50 mph ×1.5; maxspeed ≤ 25 mph ×0.7. `bicycle=no` or `dismount` on a free path is 1 turn per mile and does not delete the edge.
+
+If free edges are under 35% of length, positive stresses are multiplied by 0.4 (rural areas). This is decided per built area (the crop around the start), not per download, so a busy city tile next door does not change a rural start. Every search recomputes `stress` from tags (request road weights). A merged edge (`graph_builder`) keeps `parts` = [(length, tags)] of its pieces and its stress is the length-weighted average, so a short busy stretch inside it still counts; highway / name / bike tags on the edge come from the longest piece. Old saved graphs have no `parts` and use the edge's own tags.
+
+Download filter (`map_store.overpass_query`): `trunk`, `trunk_link`, `primary`, `primary_link`, `secondary`, `secondary_link`, `tertiary`, `tertiary_link`, `unclassified`, `residential`, `living_street`, `pedestrian`, `cycleway`, `path`, `bridleway`, `road`, plus `footway` with `bicycle=yes|designated|permissive`. Not included: other footways (sidewalks), `service`, `track`. Changing the query means bumping `FILTER_VERSION` (tiles are re-downloaded into a new folder). `graph_builder.rideable` then drops `access=private|no` unless bicycles are allowed, `area=yes`, and `footway=sidewalk`.
+
+## Crossing exemption
+
+In `grow_tree` and `score_walk`. When the edge just traversed is ≤ 160 m, strictly busier than the edge before it and the edge after it, and both junctions are ≥30° turns, the exit turn is not added (the pair costs one turn) and that edge's discomfort is refunded down to 0.15. A residential grid corner still counts. No exemption on the first edge.
+
+## Building the search graph (`graph_builder.py`)
+
+From the ways of the tiles around the start (`areas.py` asks `map_store` for tiles within max/2 + 800 m):
+
+1. Keep rideable ways (above). One-way for a bicycle: `oneway=yes|true|1|-1`, roundabouts; `oneway:bicycle=no` or contraflow `cycleway=opposite*` make it two-way.
+2. Keep nodes within max/2 + `MARGIN_M` of the start (a loop of length L never gets farther than L/2, so nothing usable is lost); ways are cut into runs of inside nodes.
+3. Split ways at junctions (a node used twice, or a run end).
+4. Prune: biconnected blocks with ≥ 3 nodes and ≥ 3 km (`MIN_BLOCK_M`) are kept, plus every block and cut vertex on the block-cut tree between two of them; everything else (dead ends, tiny loops) goes. Same rule as the old `_process_graph`, on an attribute-free graph so it takes a second, not half a minute.
+5. Merge chains through degree-2 nodes. Direction is kept (the old merge made merged one-ways two-way): a chain is one-way if any piece is; conflicting one-ways drop the chain; a chain back to its own junction is dropped.
+6. One edge per direction between two junctions (the search keeps one per `(u, v)`). When two roads join the same junctions, the most pleasant by the default table (stress + 0.3 turns/mi) keeps the direct link and the other is split at the OSM node nearest its middle, so both stay rideable (a greenway beside a primary). A road with no node to split at loses that direction.
+7. Trim by road distance from the start node (the junction nearest the pin): drop nodes with `from_start + to_start > max + 1 km`.
+
+Node ids stay OSM ids, nodes and edges are inserted sorted (same graph every build), node `elevation` comes from SRTM (0 when SRTM is paused). Intersection consolidation (commented out in the old pipeline too) is not done.
