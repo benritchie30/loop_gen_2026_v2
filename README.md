@@ -1,6 +1,6 @@
 # Loop Finder
 
-A web app that finds **looping bike routes**. Drop a pin on the map, pick a length and how quiet
+A web app that finds **looping bike routes**. Drop a pin on the map, pick a length and how busy
 you want the roads, and a Python backend searches the OpenStreetMap road network around you and
 streams candidate loops back as it finds them. The React UI lets you browse, sort, filter,
 favorite and refine those loops.
