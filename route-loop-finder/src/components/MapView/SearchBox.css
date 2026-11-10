@@ -1,0 +1,123 @@
+/* Place search: an icon at the top left that opens into a field on hover. */
+.search-box {
+    position: absolute;
+    top: var(--space-md, 12px);
+    left: var(--space-md, 12px);
+    z-index: 1100;
+    width: 40px;
+    transition: width 160ms ease-out;
+}
+
+.search-box--open {
+    width: min(340px, calc(100vw - 32px));
+}
+
+.search-box__bar {
+    display: flex;
+    align-items: center;
+    height: 40px;
+    background: var(--color-bg);
+    border-radius: var(--radius-md, 8px);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+}
+
+.search-box--open .search-box__bar {
+    box-shadow: var(--shadow-md);
+}
+
+.search-box__icon {
+    flex: 0 0 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: none;
+    color: var(--color-text);
+    cursor: pointer;
+}
+
+.search-box__input {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 100%;
+    border: none;
+    outline: none;
+    background: none;
+    font-size: 14px;
+    color: var(--color-text);
+    padding: 0 4px 0 0;
+}
+
+.search-box:not(.search-box--open) .search-box__input,
+.search-box:not(.search-box--open) .search-box__action {
+    display: none;
+}
+
+.search-box__action {
+    flex: 0 0 32px;
+    height: 32px;
+    margin-right: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--color-text-muted);
+    cursor: pointer;
+}
+
+.search-box__action:hover {
+    background: var(--color-surface);
+    color: var(--color-text);
+}
+
+.search-box__results {
+    list-style: none;
+    margin: 6px 0 0;
+    padding: 4px;
+    background: var(--color-bg);
+    border-radius: var(--radius-md, 8px);
+    box-shadow: var(--shadow-md);
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.search-box__result {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.search-box__result.is-active {
+    background: var(--color-surface);
+}
+
+.search-box__title {
+    font-size: 14px;
+    color: var(--color-text);
+}
+
+.search-box__detail {
+    font-size: 12px;
+    color: var(--color-text-muted);
+}
+
+.search-box__message {
+    padding: 8px 10px;
+    font-size: 13px;
+    color: var(--color-text-muted);
+}
+
+.search-box__spin {
+    animation: search-box-spin 0.9s linear infinite;
+}
+
+@keyframes search-box-spin {
+    to { transform: rotate(360deg); }
+}

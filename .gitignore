@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+.venv/
+
+# Project Specific
+backend/graphs/
+backend/cache/
+backend/simp_debug/
+backend/search_debug/
+backend/bench_out/
+backend/probe_out/
+backend/check_server.log
+backend/map_data/
+backend/check_ui.log
+backend/check_limits.log
+backend/check_load.log
+backend/check_ui_out/
+backend/check_frontend_out/
+backend/wheels/
+backend/.env
+
+# JavaScript/Node
+node_modules/
+dist/
+build/
+.cache/
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store

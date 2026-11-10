@@ -1,0 +1,5 @@
+networkx
+websockets>=14  # server.py uses the asyncio server of websockets 14+
+shapely
+pyproj
+SRTM.py

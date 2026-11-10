@@ -1,0 +1,219 @@
+/* Elevation chart of the shown route: bottom centre of the map area (left of the panel). */
+.elevation-window {
+    --panel-space: 376px; /* the panel (344 px) and its margins */
+    position: fixed;
+    bottom: 0;
+    left: calc((100vw - var(--panel-space)) / 2);
+    transform: translateX(-50%);
+    z-index: 900;
+    width: min(1240px, calc(100vw - var(--panel-space) - 32px)); /* wide and low, like a route planner's */
+    background: var(--color-bg);
+    border-radius: 14px 14px 0 0;
+    box-shadow: 0 -4px 24px rgba(15, 23, 42, 0.14);
+    padding: 10px 14px 6px;
+    animation: slideUp 0.3s ease-out;
+}
+
+@keyframes slideUp {
+    from {
+        transform: translateX(-50%) translateY(100%);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateX(-50%) translateY(0);
+        opacity: 1;
+    }
+}
+
+.elevation-window__content {
+    max-height: 300px;
+}
+
+.elevation-window__header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 4px;
+}
+
+.elevation-window__header h3 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 650;
+    color: var(--color-text);
+}
+
+.elevation-window__stats {
+    display: flex;
+    gap: 14px;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.elevation-window__stat {
+    display: flex;
+    align-items: baseline;
+    gap: 5px;
+    font-size: 11px;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+}
+
+.elevation-window__stat-value {
+    min-width: 52px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text);
+    font-variant-numeric: tabular-nums;
+}
+
+.elevation-window__stat-value--grade-pos {
+    color: #c2410c;
+}
+
+.elevation-window__stat-value--grade-neg {
+    color: #15803d;
+}
+
+/* Length, climb and descent of what the chart shows (the whole route, or the part zoomed or dragged over). */
+.elevation-window__summary {
+    flex: 0 0 auto;
+    font-size: 12px;
+    color: var(--color-text);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.elevation-window__summary strong {
+    font-weight: 650;
+}
+
+.elevation-window__summary.is-part {
+    color: var(--color-primary);
+}
+
+.elevation-window__controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+}
+
+.elevation-window__flip-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 26px;
+    padding: 0 8px;
+    border: 1px solid var(--color-border);
+    border-radius: 7px;
+    background: var(--color-bg);
+    font-size: 12px;
+    color: var(--color-text);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all var(--transition-fast);
+}
+
+.elevation-window__flip-btn:hover {
+    border-color: var(--color-primary);
+}
+
+.elevation-window__flip-btn.active {
+    background: var(--color-primary);
+    color: white;
+    border-color: var(--color-primary);
+}
+
+.elevation-window__pct {
+    font-weight: 700;
+}
+
+.elevation-window__close {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.elevation-window__close:hover {
+    background: var(--color-surface);
+    color: var(--color-text);
+}
+
+.elevation-window__chart-container {
+    height: 150px;
+}
+
+/* Grade colours: the key under the chart, cool (downhill) to warm (steep). */
+.elevation-window__grade-key {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    padding: 2px 0 4px 48px; /* lines up with the plot's left edge */
+    font-size: 10.5px;
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.elevation-window__grade-key-title {
+    font-weight: 600;
+    color: var(--color-text);
+}
+
+.elevation-window__grade-key-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+}
+
+.elevation-window__grade-key-swatch {
+    width: 12px;
+    height: 10px;
+    border-radius: 2px;
+}
+
+/* The Grade colors button's icon: a tiny cool-to-warm bar. */
+.elevation-window__grade-swatch {
+    width: 14px;
+    height: 8px;
+    border-radius: 2px;
+    background: linear-gradient(to right, #14398a, #3a9d4a, #e8c619, #ec7a1c, #8e1014);
+}
+
+/* Elevation window hidden: a small button brings it back */
+.elevation-toggle-btn {
+    position: fixed;
+    bottom: 16px;
+    left: calc((100vw - 376px) / 2);
+    transform: translateX(-50%);
+    z-index: 900;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
+    color: var(--color-text);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.elevation-toggle-btn:hover {
+    background: var(--color-primary);
+    color: white;
+    border-color: var(--color-primary);
+}

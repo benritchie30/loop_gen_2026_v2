@@ -1,0 +1,398 @@
+.map-view {
+    height: 100%;
+    width: 100%;
+    position: relative;
+}
+
+.map-view .leaflet-container {
+    height: 100%;
+    width: 100%;
+    z-index: 1;
+}
+
+/* Status indicator */
+.map-view__status {
+    position: absolute;
+    top: 10px;
+    left: 56px;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: var(--space-sm) var(--space-md);
+    background: var(--color-bg);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+}
+
+.map-view__status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--color-text-muted);
+}
+
+.map-view__status-dot--connected {
+    background: #2e7d32;
+}
+
+.map-view__status-dot--disconnected {
+    background: #d32f2f;
+}
+
+.map-view__status-dot--connecting {
+    background: var(--color-accent);
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.5;
+    }
+}
+
+/* Generation in progress: top centre of the map area (left of the panel) */
+.map-view__generating {
+    position: absolute;
+    top: 16px;
+    left: calc((100% - 376px) / 2);
+    transform: translateX(-50%);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: 4px 4px 4px 14px;
+    background: var(--color-bg);
+    border-radius: 999px;
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.15);
+    font-size: 13px;
+    color: var(--color-text);
+    white-space: nowrap;
+}
+
+.map-view__stop-btn {
+    padding: 5px 12px;
+    background: #dc2626;
+    color: white;
+    border: none;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color var(--transition-fast);
+}
+
+.map-view__stop-btn:hover {
+    background: #b91c1c;
+}
+
+/* What the active tool does: top centre of the map area */
+.map-view__hint {
+    position: absolute;
+    top: 16px;
+    left: calc((100% - 376px) / 2);
+    transform: translate(-50%, -6px);
+    z-index: 1000;
+    max-width: min(640px, calc(100% - 376px - 120px));
+    padding: 8px 14px;
+    background: rgba(15, 23, 42, 0.84);
+    color: white;
+    border-radius: 10px;
+    font-size: 13px;
+    line-height: 1.35;
+    text-align: center;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity var(--transition-normal), transform var(--transition-normal);
+}
+
+.map-view__hint--visible {
+    opacity: 1;
+    transform: translate(-50%, 0);
+}
+
+/* Below the "Generating…" pill */
+.map-view__hint--low {
+    top: 64px;
+}
+
+/* Direction arrows along active path */
+.direction-arrow {
+    background: transparent !important;
+    border: none !important;
+}
+
+.direction-arrow__inner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.9));
+}
+
+/* Map Tile Switcher */
+.map-tile-switcher {
+    position: absolute;
+    top: calc(var(--space-md) + 48px); /* under the search icon */
+    left: var(--space-md);
+    z-index: 1000;
+}
+
+.map-tile-switcher__button {
+    width: 40px;
+    height: 40px;
+    background: var(--color-bg);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--color-text);
+    transition: background-color var(--transition-fast);
+}
+
+.map-tile-switcher__button:hover {
+    background-color: var(--color-bg-hover);
+}
+
+.map-tile-switcher__menu {
+    position: absolute;
+    top: 0;
+    left: 44px;
+    background: var(--color-bg);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    padding: var(--space-xs);
+    width: 200px;
+    animation: fadeIn 0.2s ease-out;
+}
+
+.map-tile-switcher__menu::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -8px;
+    width: 8px;
+    height: 100%;
+}
+
+.map-tile-switcher__option {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: var(--space-sm);
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: background-color var(--transition-fast);
+}
+
+.map-tile-switcher__option:hover {
+    background-color: var(--color-bg-hover);
+}
+
+.map-tile-switcher__option.active {
+    background-color: var(--color-primary-light);
+    color: var(--color-primary);
+    font-weight: var(--font-weight-medium);
+}
+
+.map-tile-switcher__preview {
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    border: 1px solid var(--color-border);
+}
+
+.map-tile-switcher__preview--offline {
+    background: repeating-linear-gradient(45deg, #f4f4f0, #f4f4f0 4px, #c9ced4 4px, #c9ced4 6px);
+}
+
+/* Offline basemap: grey where no map data is downloaded; the downloaded
+   tiles are drawn light (OfflineBasemap) with their roads. */
+.map-view--offline .leaflet-container {
+    background: #e4e2db;
+}
+
+/* Offline, with no downloaded map data in view */
+.map-view__goto-data {
+    position: absolute;
+    bottom: 28px;
+    left: calc((100% - 376px) / 2);
+    transform: translateX(-50%);
+    z-index: 1000;
+    padding: 9px 16px;
+    border-radius: 999px;
+    background: var(--color-bg);
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.18);
+    font-size: 13px;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.map-view__goto-data strong {
+    color: var(--color-primary);
+    font-weight: 600;
+}
+
+.map-view__goto-data:hover strong {
+    text-decoration: underline;
+}
+
+.map-tile-switcher__preview--light {
+    background: #f0f0f0;
+}
+
+.map-tile-switcher__preview--dark {
+    background: #222;
+}
+
+.map-tile-switcher__preview--street {
+    background: #e0e0e0;
+    background-image: linear-gradient(45deg, #ccc 25%, transparent 25%), linear-gradient(-45deg, #ccc 25%, transparent 25%);
+    background-size: 8px 8px;
+}
+
+.map-tile-switcher__preview--satellite {
+    background: #388e3c;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-5px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.leaflet-container.route-tool-active,
+.leaflet-container.route-tool-active .leaflet-interactive {
+    cursor: crosshair;
+}
+
+/* Route count on a generation's pin */
+.custom-marker-icon {
+    position: relative;
+}
+
+.marker-badge {
+    position: absolute;
+    top: -7px;
+    left: 15px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    border: 2px solid #fff;
+    background: #64748b;
+    color: #fff;
+    font: 600 11px/14px system-ui, sans-serif;
+    text-align: center;
+    box-sizing: border-box;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+.marker-badge--active {
+    background: var(--color-primary, #3068c8);
+}
+
+/* The pin of the generation under the pointer in "Your loops" */
+.custom-marker-icon--highlight .marker-badge {
+    left: 20px;
+    background: #ea580c;
+}
+
+/* Several generations start at one pin: a menu of them */
+.set-menu .leaflet-popup-content-wrapper {
+    border-radius: 10px;
+    padding: 0;
+}
+
+.set-menu .leaflet-popup-content {
+    margin: 8px;
+    min-width: 180px;
+    font: 13px/1.3 system-ui, sans-serif;
+}
+
+.set-menu__title {
+    padding: 2px 6px 6px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #64748b;
+}
+
+.set-menu__list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.set-menu__item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    width: 100%;
+    padding: 6px;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    text-align: left;
+    cursor: pointer;
+}
+
+.set-menu__item:hover {
+    background: #f1f5f9;
+}
+
+.set-menu__item.is-active .set-menu__name {
+    color: var(--color-primary, #3068c8);
+}
+
+.set-menu__name {
+    font-weight: 500;
+    color: #0f172a;
+}
+
+.set-menu__meta {
+    font-size: 11px;
+    color: #64748b;
+}
+
+/* Boundary editor handles */
+.boundary-handle {
+    border-radius: 50%;
+    background: #fff;
+    border: 2px solid #334155;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.35);
+    cursor: grab;
+}
+
+.boundary-handle:active {
+    cursor: grabbing;
+}
+
+.boundary-handle--mid {
+    background: rgba(255, 255, 255, 0.75);
+    border-width: 1px;
+    border-style: dashed;
+}
+
+.boundary-handle--move {
+    background: #334155;
+    border-color: #fff;
+    cursor: move;
+}
